@@ -1,0 +1,761 @@
+import { useState, useMemo } from 'react';
+import { usePosStore } from '@/stores/posStore';
+import { useAuthStore } from '@/stores/authStore';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useToast } from '@/hooks/use-toast';
+import {
+  Search, RotateCcw, CheckCircle, ShoppingCart, Package, DollarSign,
+  AlertTriangle, Clock, Hash, User, CreditCard, FileText, ChevronRight,
+  ArrowLeft, Receipt, Eye, History,
+} from 'lucide-react';
+import { formatCurrency, formatDateTime, formatDate } from '@/lib/taxCalc';
+import type { PaymentMethod, SaleTransaction, SaleItem } from '@/types';
+
+const REFUND_METHODS: { value: PaymentMethod; label: string; icon: typeof CreditCard }[] = [
+  { value: 'cash', label: 'Cash Refund', icon: DollarSign },
+  { value: 'debit', label: 'Debit Refund', icon: CreditCard },
+  { value: 'credit', label: 'Credit Card Refund', icon: CreditCard },
+  { value: 'store-credit', label: 'Store Credit', icon: Receipt },
+];
+
+interface SelectedReturnItem {
+  saleItemId: string;
+  quantity: number;
+  refundAmount: number;
+}
+
+export default function ReturnsPage() {
+  const { employee, store } = useAuthStore();
+  const pos = usePosStore();
+  const { toast } = useToast();
+
+  const [activeTab, setActiveTab] = useState('process');
+
+  // ── Process Return state ──
+  const [step, setStep] = useState<'search' | 'select' | 'confirm'>('search');
+  const [saleSearch, setSaleSearch] = useState('');
+  const [foundSale, setFoundSale] = useState<SaleTransaction | null>(null);
+  const [selectedItems, setSelectedItems] = useState<SelectedReturnItem[]>([]);
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod>('cash');
+  const [reason, setReason] = useState('Customer return');
+  const [notes, setNotes] = useState('');
+
+  // ── History state ──
+  const [historySearch, setHistorySearch] = useState('');
+  const [showDetail, setShowDetail] = useState<string | null>(null);
+
+  // Derived data
+  const foundSaleItems = foundSale ? pos.saleItems.filter((i) => i.salesTransactionId === foundSale.id) : [];
+  const salePayments = foundSale ? pos.salePayments.filter((p) => p.transactionId === foundSale.id) : [];
+  const saleCustomer = foundSale?.customerId ? pos.customers.find((c) => c.id === foundSale.customerId) : null;
+
+  // Check which items are already returned
+  const alreadyReturnedItemIds = useMemo(() => {
+    if (!foundSale) return new Set<string>();
+    const ids = new Set<string>();
+    pos.returns
+      .filter((r) => r.sourceTransactionId === foundSale.id && r.status === 'completed')
+      .forEach((r) => { if (r.sourceItemId) ids.add(r.sourceItemId); });
+    return ids;
+  }, [foundSale, pos.returns]);
+
+  const totalRefund = useMemo(() => selectedItems.reduce((s, i) => s + i.refundAmount, 0), [selectedItems]);
+
+  // ── Stats ──
+  const stats = useMemo(() => {
+    const completed = pos.returns.filter((r) => r.status === 'completed');
+    const today = completed.filter((r) => {
+      const d = new Date(r.completedAt || r.createdAt);
+      const now = new Date();
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    });
+    return {
+      totalReturns: completed.length,
+      todayReturns: today.length,
+      todayRefunded: today.reduce((s, r) => s + r.returnAmount, 0),
+      totalRefunded: completed.reduce((s, r) => s + r.returnAmount, 0),
+    };
+  }, [pos.returns]);
+
+  // ── History filtered ──
+  const filteredHistory = useMemo(() => {
+    let list = pos.returns.filter((r) => r.status === 'completed');
+    if (historySearch.trim()) {
+      const q = historySearch.toLowerCase();
+      list = list.filter((r) => {
+        const sale = pos.sales.find((s) => s.id === r.sourceTransactionId);
+        const cust = r.customerId ? pos.customers.find((c) => c.id === r.customerId) : null;
+        return (
+          r.returnCode.toLowerCase().includes(q) ||
+          (sale?.saleCode || '').toLowerCase().includes(q) ||
+          (cust ? `${cust.firstName} ${cust.lastName}`.toLowerCase().includes(q) : false) ||
+          r.reason.toLowerCase().includes(q)
+        );
+      });
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [pos.returns, pos.sales, pos.customers, historySearch]);
+
+  // Detail return
+  const detailReturn = showDetail ? pos.returns.find((r) => r.id === showDetail) : null;
+  const detailSale = detailReturn ? pos.sales.find((s) => s.id === detailReturn.sourceTransactionId) : null;
+  const detailItem = detailReturn?.sourceItemId ? pos.saleItems.find((i) => i.id === detailReturn.sourceItemId) : null;
+  const detailCustomer = detailReturn?.customerId ? pos.customers.find((c) => c.id === detailReturn.customerId) : null;
+
+  // ── Handlers ──
+  const handleSearch = () => {
+    const q = saleSearch.toLowerCase().trim();
+    if (!q) return;
+    const sale = pos.sales.find((s) =>
+      s.saleCode.toLowerCase().includes(q) || s.id.toLowerCase().includes(q)
+    );
+    if (!sale) { toast({ variant: 'destructive', title: 'Sale not found', description: 'Check the sale code and try again.' }); return; }
+    if (sale.status === 'voided') { toast({ variant: 'destructive', title: 'This sale has been voided and cannot be returned.' }); return; }
+    setFoundSale(sale);
+    setSelectedItems([]);
+    setStep('select');
+  };
+
+  const toggleItem = (item: SaleItem) => {
+    if (alreadyReturnedItemIds.has(item.id)) return;
+    setSelectedItems((prev) => {
+      const existing = prev.find((i) => i.saleItemId === item.id);
+      if (existing) return prev.filter((i) => i.saleItemId !== item.id);
+      return [...prev, { saleItemId: item.id, quantity: item.quantity, refundAmount: item.lineTotal }];
+    });
+  };
+
+  const updateRefundAmount = (saleItemId: string, amount: number) => {
+    setSelectedItems((prev) => prev.map((i) => i.saleItemId === saleItemId ? { ...i, refundAmount: amount } : i));
+  };
+
+  const handleProceedToConfirm = () => {
+    if (selectedItems.length === 0) { toast({ variant: 'destructive', title: 'Select at least one item to return.' }); return; }
+    setStep('confirm');
+  };
+
+  const handleProcessReturn = () => {
+    if (!foundSale || !employee || !store) return;
+    if (!reason.trim()) { toast({ variant: 'destructive', title: 'Enter a return reason.' }); return; }
+
+    // Process one return per selected item for proper audit trail
+    selectedItems.forEach((sel) => {
+      const saleItem = foundSaleItems.find((i) => i.id === sel.saleItemId);
+      const retId = pos.createReturn({
+        sourceTransactionType: 'sale',
+        sourceTransactionId: foundSale.id,
+        sourceItemId: sel.saleItemId,
+        customerId: foundSale.customerId,
+        employeeId: employee.id,
+        storeId: store.id,
+        reason: `${reason}${notes ? ` — ${notes}` : ''}`,
+        returnAmount: sel.refundAmount,
+        refundMethod,
+      });
+      pos.completeReturn(retId, employee.fullName);
+    });
+
+    toast({
+      title: 'Return processed successfully',
+      description: `${selectedItems.length} item(s) returned — ${formatCurrency(totalRefund)} refunded via ${refundMethod}`,
+    });
+
+    // Reset
+    setFoundSale(null);
+    setSelectedItems([]);
+    setSaleSearch('');
+    setReason('Customer return');
+    setNotes('');
+    setStep('search');
+  };
+
+  const handleReset = () => {
+    setFoundSale(null);
+    setSelectedItems([]);
+    setSaleSearch('');
+    setReason('Customer return');
+    setNotes('');
+    setStep('search');
+  };
+
+  const empName = (id: string) => {
+    const emp = useAuthStore.getState().getEmployeeById(id);
+    return emp?.fullName || id;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          { label: 'Total Returns', value: String(stats.totalReturns), icon: RotateCcw, color: 'text-blue-600 bg-blue-50' },
+          { label: 'Today Returns', value: String(stats.todayReturns), icon: Clock, color: 'text-purple-600 bg-purple-50' },
+          { label: 'Today Refunded', value: formatCurrency(stats.todayRefunded), icon: DollarSign, color: 'text-red-600 bg-red-50' },
+          { label: 'All Time Refunded', value: formatCurrency(stats.totalRefunded), icon: DollarSign, color: 'text-amber-600 bg-amber-50' },
+        ].map((s) => {
+          const Icon = s.icon;
+          return (
+            <Card key={s.label}>
+              <CardContent className="pt-3 pb-2.5">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] text-muted-foreground font-medium">{s.label}</p>
+                  <div className={`size-7 rounded-lg flex items-center justify-center ${s.color}`}><Icon className="size-3.5" /></div>
+                </div>
+                <p className="text-xl font-bold font-mono tabular-nums">{s.value}</p>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="h-9">
+          <TabsTrigger value="process" className="text-[11px] h-7 px-3">
+            <RotateCcw className="size-3 mr-1.5" />Process Return
+          </TabsTrigger>
+          <TabsTrigger value="history" className="text-[11px] h-7 px-3">
+            <History className="size-3 mr-1.5" />Return History
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ═══ PROCESS RETURN TAB ═══ */}
+        <TabsContent value="process" className="mt-3">
+          {/* Step indicator */}
+          <div className="flex items-center gap-2 mb-4">
+            {[
+              { key: 'search', label: '1. Find Sale', icon: Search },
+              { key: 'select', label: '2. Select Items', icon: Package },
+              { key: 'confirm', label: '3. Confirm & Refund', icon: CheckCircle },
+            ].map((s, i) => {
+              const Icon = s.icon;
+              const isActive = step === s.key;
+              const isPast = (step === 'select' && s.key === 'search') || (step === 'confirm' && (s.key === 'search' || s.key === 'select'));
+              return (
+                <div key={s.key} className="flex items-center gap-2">
+                  {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground/30" />}
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium transition-colors ${
+                    isActive ? 'bg-primary text-white' : isPast ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'
+                  }`}>
+                    <Icon className="size-3" />
+                    {s.label}
+                  </div>
+                </div>
+              );
+            })}
+            {step !== 'search' && (
+              <Button size="sm" variant="ghost" className="ml-auto h-7 text-[10px]" onClick={handleReset}>
+                <ArrowLeft className="size-3 mr-1" />Start Over
+              </Button>
+            )}
+          </div>
+
+          {/* STEP 1: Search */}
+          {step === 'search' && (
+            <div className="grid grid-cols-12 gap-5">
+              <div className="col-span-5">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-[14px] flex items-center gap-2">
+                      <Search className="size-4 text-primary" />Find Original Sale
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-[11px] text-muted-foreground mb-3">Enter a sale code (e.g. S-20241117-0001) or sale ID to look up the transaction.</p>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Sale code or ID…"
+                          value={saleSearch}
+                          onChange={(e) => setSaleSearch(e.target.value)}
+                          className="pl-9 h-10 text-[12px]"
+                          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                          autoFocus
+                        />
+                      </div>
+                      <Button className="h-10" onClick={handleSearch}>
+                        <Search className="size-3.5 mr-1.5" />Search
+                      </Button>
+                    </div>
+
+                    {/* Quick recent sales list */}
+                    <div className="mt-4">
+                      <p className="text-[10px] font-semibold text-muted-foreground mb-2">RECENT COMPLETED SALES</p>
+                      <div className="space-y-1 max-h-[300px] overflow-y-auto">
+                        {pos.sales
+                          .filter((s) => s.status === 'completed')
+                          .sort((a, b) => new Date(b.completedAt || b.createdAt).getTime() - new Date(a.completedAt || a.createdAt).getTime())
+                          .slice(0, 12)
+                          .map((sale) => {
+                            const items = pos.saleItems.filter((i) => i.salesTransactionId === sale.id);
+                            const cust = sale.customerId ? pos.customers.find((c) => c.id === sale.customerId) : null;
+                            return (
+                              <button
+                                key={sale.id}
+                                onClick={() => { setFoundSale(sale); setSelectedItems([]); setStep('select'); }}
+                                className="w-full text-left px-3 py-2.5 rounded-lg border border-transparent hover:bg-secondary/60 hover:border-border transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-mono font-semibold text-primary">{sale.saleCode}</span>
+                                    {cust && <span className="text-[10px] text-muted-foreground">{cust.firstName} {cust.lastName}</span>}
+                                  </div>
+                                  <span className="text-[11px] font-mono font-semibold tabular-nums">{formatCurrency(sale.totalAmount)}</span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 text-[9px] text-muted-foreground">
+                                  <span>{items.length} item(s)</span>
+                                  <span>·</span>
+                                  <span>{formatDate(sale.completedAt || sale.createdAt)}</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+              <div className="col-span-7 flex items-center justify-center">
+                <Card className="w-full min-h-[400px] flex items-center justify-center">
+                  <div className="text-center">
+                    <RotateCcw className="size-14 mx-auto text-muted-foreground/15 mb-3" />
+                    <p className="text-[14px] font-semibold text-muted-foreground mb-1">Search for a sale to process a return</p>
+                    <p className="text-[11px] text-muted-foreground/70">Or click a recent sale from the list</p>
+                  </div>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: Select Items */}
+          {step === 'select' && foundSale && (
+            <div className="grid grid-cols-12 gap-5">
+              <div className="col-span-8 space-y-4">
+                {/* Sale info banner */}
+                <Card className="bg-primary/5 border-primary/20">
+                  <CardContent className="pt-3 pb-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="size-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                          <Receipt className="size-5 text-primary" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] font-bold font-mono">{foundSale.saleCode}</span>
+                            <Badge variant="outline" className="text-[9px] capitalize">{foundSale.status}</Badge>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                            <span>{formatDateTime(foundSale.completedAt || foundSale.createdAt)}</span>
+                            {saleCustomer && (<><span>·</span><span>{saleCustomer.firstName} {saleCustomer.lastName}</span></>)}
+                            <span>·</span>
+                            <span>{empName(foundSale.employeeId)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] text-muted-foreground">Sale Total</p>
+                        <p className="text-lg font-bold font-mono tabular-nums">{formatCurrency(foundSale.totalAmount)}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Items selection */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-[14px]">Select Items to Return</CardTitle>
+                      <Badge variant="outline" className="text-[9px]">{selectedItems.length} / {foundSaleItems.length} selected</Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {foundSaleItems.map((item) => {
+                        const isReturned = alreadyReturnedItemIds.has(item.id);
+                        const isSelected = selectedItems.some((s) => s.saleItemId === item.id);
+                        const selItem = selectedItems.find((s) => s.saleItemId === item.id);
+                        const inv = item.inventoryItemId ? pos.inventory.find((i) => i.id === item.inventoryItemId) : null;
+
+                        return (
+                          <div key={item.id} className={`rounded-lg border-2 p-4 transition-all ${
+                            isReturned ? 'opacity-50 border-red-200 bg-red-50/30'
+                            : isSelected ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/30'
+                          }`}>
+                            <div className="flex items-start gap-3">
+                              <div className="pt-1">
+                                <Checkbox
+                                  checked={isSelected}
+                                  disabled={isReturned}
+                                  onCheckedChange={() => toggleItem(item)}
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-[13px] font-semibold">{item.brand} {item.model}</p>
+                                      {isReturned && <Badge variant="destructive" className="text-[8px]">Already Returned</Badge>}
+                                    </div>
+                                    <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground">
+                                      <span>Category: {item.category}</span>
+                                      {item.serialImei && <span>S/N: {item.serialImei}</span>}
+                                      {inv && <span>Device: {inv.deviceCode}</span>}
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-[10px] text-muted-foreground">Line Total</p>
+                                    <p className="text-[14px] font-bold font-mono tabular-nums">{formatCurrency(item.lineTotal)}</p>
+                                    <p className="text-[9px] text-muted-foreground">
+                                      {item.quantity} × {formatCurrency(item.unitPrice)} + tax
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Editable refund amount */}
+                                {isSelected && selItem && (
+                                  <div className="mt-3 p-3 bg-white rounded-lg border border-primary/20">
+                                    <div className="flex items-center gap-3">
+                                      <div className="flex-1">
+                                        <Label className="text-[10px] font-medium">Refund Amount</Label>
+                                        <div className="relative mt-1">
+                                          <DollarSign className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                                          <Input
+                                            type="number"
+                                            step="0.01"
+                                            value={selItem.refundAmount || ''}
+                                            onChange={(e) => updateRefundAmount(item.id, Number(e.target.value))}
+                                            className="pl-7 h-8 text-[12px] font-mono"
+                                          />
+                                        </div>
+                                      </div>
+                                      <div className="text-right">
+                                        <p className="text-[9px] text-muted-foreground">Max refundable</p>
+                                        <p className="text-[11px] font-mono font-semibold text-primary">{formatCurrency(item.lineTotal)}</p>
+                                      </div>
+                                    </div>
+                                    {selItem.refundAmount > item.lineTotal && (
+                                      <div className="flex items-center gap-1.5 mt-2 text-[10px] text-amber-700">
+                                        <AlertTriangle className="size-3" />
+                                        Refund exceeds original line total
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Right: Summary + actions */}
+              <div className="col-span-4 space-y-4">
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-[13px]">Return Summary</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-[12px]">
+                        <span className="text-muted-foreground">Items to return</span>
+                        <span className="font-semibold">{selectedItems.length}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[12px]">
+                        <span className="text-muted-foreground">Total refund</span>
+                        <span className="font-bold font-mono text-[15px] text-destructive tabular-nums">{formatCurrency(totalRefund)}</span>
+                      </div>
+                      <hr />
+
+                      {/* Original sale payments */}
+                      <div>
+                        <p className="text-[10px] font-semibold text-muted-foreground mb-1.5">ORIGINAL PAYMENT</p>
+                        <div className="space-y-1">
+                          {salePayments.map((p) => (
+                            <div key={p.id} className="flex items-center justify-between text-[11px]">
+                              <span className="capitalize">{p.method}</span>
+                              <span className="font-mono tabular-nums">{formatCurrency(p.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Button onClick={handleProceedToConfirm} disabled={selectedItems.length === 0} className="w-full h-10">
+                  Continue to Refund <ChevronRight className="size-3.5 ml-1" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 3: Confirm & Process */}
+          {step === 'confirm' && foundSale && (
+            <div className="grid grid-cols-12 gap-5">
+              <div className="col-span-7 space-y-4">
+                {/* Items being returned */}
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-[14px]">Returning {selectedItems.length} Item(s)</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {selectedItems.map((sel) => {
+                        const item = foundSaleItems.find((i) => i.id === sel.saleItemId);
+                        if (!item) return null;
+                        const inv = item.inventoryItemId ? pos.inventory.find((i) => i.id === item.inventoryItemId) : null;
+                        return (
+                          <div key={sel.saleItemId} className="flex items-center justify-between px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
+                            <div>
+                              <p className="text-[12px] font-semibold">{item.brand} {item.model}</p>
+                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                                <span>{item.category}</span>
+                                {inv && (<><span>·</span><span>{inv.deviceCode}</span></>)}
+                                {item.serialImei && (<><span>·</span><span>S/N: {item.serialImei}</span></>)}
+                              </div>
+                              {inv && (
+                                <div className="flex items-center gap-1 mt-1 text-[9px] text-primary">
+                                  <Package className="size-3" />
+                                  Inventory will be restored to "returned" status
+                                </div>
+                              )}
+                            </div>
+                            <p className="text-[14px] font-bold font-mono tabular-nums text-destructive">{formatCurrency(sel.refundAmount)}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Reason & notes */}
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-[13px]">Return Details</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div>
+                        <Label className="text-[11px]">Return Reason *</Label>
+                        <Select value={reason} onValueChange={setReason}>
+                          <SelectTrigger className="mt-1 h-9 text-[12px]"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {['Customer return', 'Defective product', 'Wrong item', 'Customer dissatisfied', 'Price match', 'Duplicate charge', 'Other'].map((r) => (
+                              <SelectItem key={r} value={r}>{r}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-[11px]">Additional Notes</Label>
+                        <Textarea
+                          value={notes}
+                          onChange={(e) => setNotes(e.target.value)}
+                          className="mt-1 text-[12px] min-h-[60px]"
+                          placeholder="Optional notes about this return…"
+                        />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="col-span-5 space-y-4">
+                {/* Refund method */}
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-[13px]">Refund Method</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-2">
+                      {REFUND_METHODS.map((m) => {
+                        const Icon = m.icon;
+                        const active = refundMethod === m.value;
+                        return (
+                          <button
+                            key={m.value}
+                            onClick={() => setRefundMethod(m.value)}
+                            className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border-2 transition-all cursor-pointer ${
+                              active ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/30'
+                            }`}
+                          >
+                            <Icon className={`size-5 ${active ? 'text-primary' : 'text-muted-foreground'}`} />
+                            <span className={`text-[11px] font-medium ${active ? 'text-primary' : 'text-muted-foreground'}`}>{m.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {refundMethod === 'cash' && pos.cashDrawer.isOpen && (
+                      <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[10px] text-amber-800 flex items-start gap-2">
+                        <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+                        <span>Cash drawer will be adjusted by <span className="font-mono font-bold">-{formatCurrency(totalRefund)}</span></span>
+                      </div>
+                    )}
+                    {refundMethod === 'cash' && !pos.cashDrawer.isOpen && (
+                      <div className="mt-3 p-2.5 bg-red-50 border border-red-200 rounded-lg text-[10px] text-red-800 flex items-start gap-2">
+                        <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+                        <span>Cash drawer is closed. Open it first or choose another refund method.</span>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Final summary */}
+                <Card className="border-2 border-destructive/30 bg-destructive/5">
+                  <CardContent className="pt-4 pb-4">
+                    <div className="text-center mb-3">
+                      <p className="text-[11px] text-muted-foreground font-medium">Total Refund Amount</p>
+                      <p className="text-3xl font-bold font-mono tabular-nums text-destructive">{formatCurrency(totalRefund)}</p>
+                    </div>
+                    <div className="space-y-1 text-[11px] mb-4">
+                      <div className="flex justify-between"><span className="text-muted-foreground">Sale</span><span className="font-mono">{foundSale.saleCode}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Items</span><span>{selectedItems.length}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Method</span><span className="capitalize">{refundMethod}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Operator</span><span>{employee?.fullName}</span></div>
+                    </div>
+                    <Button variant="destructive" className="w-full h-11 text-[13px] font-semibold" onClick={handleProcessReturn}>
+                      <CheckCircle className="size-4 mr-2" />Confirm Return — {formatCurrency(totalRefund)}
+                    </Button>
+                    <Button variant="ghost" className="w-full h-8 text-[10px] mt-2" onClick={() => setStep('select')}>
+                      <ArrowLeft className="size-3 mr-1" />Back to Item Selection
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ═══ RETURN HISTORY TAB ═══ */}
+        <TabsContent value="history" className="mt-3 space-y-4">
+          <Card>
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                  <Input placeholder="Search by return code, sale code, customer name…" value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} className="pl-9 h-9 text-[12px]" />
+                </div>
+                <Badge variant="outline" className="text-[9px] font-mono">{filteredHistory.length} returns</Badge>
+              </div>
+            </CardContent>
+          </Card>
+
+          {filteredHistory.length === 0 ? (
+            <Card className="min-h-[300px] flex items-center justify-center">
+              <div className="text-center">
+                <RotateCcw className="size-12 mx-auto text-muted-foreground/15 mb-2" />
+                <p className="text-[13px] text-muted-foreground">No returns found</p>
+              </div>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {filteredHistory.map((ret) => {
+                const sale = pos.sales.find((s) => s.id === ret.sourceTransactionId);
+                const cust = ret.customerId ? pos.customers.find((c) => c.id === ret.customerId) : null;
+                const saleItem = ret.sourceItemId ? pos.saleItems.find((i) => i.id === ret.sourceItemId) : null;
+                return (
+                  <Card key={ret.id} className="hover:border-primary/30 transition-colors">
+                    <CardContent className="pt-3 pb-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="size-9 rounded-lg bg-red-50 flex items-center justify-center">
+                            <RotateCcw className="size-4 text-red-600" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[12px] font-bold font-mono">{ret.returnCode}</span>
+                              {sale && <span className="text-[10px] text-muted-foreground">← {sale.saleCode}</span>}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
+                              {cust && <span>{cust.firstName} {cust.lastName}</span>}
+                              {saleItem && (<><span>·</span><span>{saleItem.brand} {saleItem.model}</span></>)}
+                              <span>·</span>
+                              <span>{formatDateTime(ret.completedAt || ret.createdAt)}</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground/70 mt-0.5">{ret.reason}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-[14px] font-bold font-mono tabular-nums text-destructive">-{formatCurrency(ret.returnAmount)}</p>
+                            <Badge variant="outline" className="text-[8px] capitalize">{ret.refundMethod}</Badge>
+                          </div>
+                          <Button size="sm" variant="ghost" className="h-7 text-[10px]" onClick={() => setShowDetail(ret.id)}>
+                            <Eye className="size-3 mr-1" />View
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {/* ═══ DETAIL DIALOG ═══ */}
+      <Dialog open={!!showDetail} onOpenChange={() => setShowDetail(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>Return Details</DialogTitle></DialogHeader>
+          {detailReturn && (
+            <div className="space-y-4 mt-2">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-secondary/50 rounded-lg p-3">
+                  <p className="text-[10px] text-muted-foreground">Return Code</p>
+                  <p className="text-[13px] font-bold font-mono">{detailReturn.returnCode}</p>
+                </div>
+                <div className="bg-secondary/50 rounded-lg p-3">
+                  <p className="text-[10px] text-muted-foreground">Original Sale</p>
+                  <p className="text-[13px] font-bold font-mono">{detailSale?.saleCode || '—'}</p>
+                </div>
+                <div className="bg-secondary/50 rounded-lg p-3">
+                  <p className="text-[10px] text-muted-foreground">Refund Amount</p>
+                  <p className="text-[14px] font-bold font-mono text-destructive">{formatCurrency(detailReturn.returnAmount)}</p>
+                </div>
+                <div className="bg-secondary/50 rounded-lg p-3">
+                  <p className="text-[10px] text-muted-foreground">Refund Method</p>
+                  <p className="text-[13px] font-semibold capitalize">{detailReturn.refundMethod}</p>
+                </div>
+              </div>
+
+              {detailItem && (
+                <div className="p-3 bg-secondary/30 rounded-lg border">
+                  <p className="text-[10px] font-semibold text-muted-foreground mb-1">RETURNED ITEM</p>
+                  <p className="text-[13px] font-semibold">{detailItem.brand} {detailItem.model}</p>
+                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                    <span>{detailItem.category}</span>
+                    {detailItem.serialImei && (<><span>·</span><span>S/N: {detailItem.serialImei}</span></>)}
+                    <span>·</span>
+                    <span>Qty {detailItem.quantity} × {formatCurrency(detailItem.unitPrice)}</span>
+                  </div>
+                </div>
+              )}
+
+              {detailCustomer && (
+                <div className="p-3 bg-secondary/30 rounded-lg border">
+                  <p className="text-[10px] font-semibold text-muted-foreground mb-1">CUSTOMER</p>
+                  <p className="text-[12px] font-semibold">{detailCustomer.firstName} {detailCustomer.lastName}</p>
+                  <p className="text-[10px] text-muted-foreground">{detailCustomer.phone} · {detailCustomer.email}</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 text-[11px]">
+                <div><span className="text-muted-foreground">Reason:</span> <span className="font-medium">{detailReturn.reason}</span></div>
+                <div><span className="text-muted-foreground">Processed by:</span> <span className="font-medium">{empName(detailReturn.employeeId)}</span></div>
+                <div><span className="text-muted-foreground">Created:</span> <span className="font-mono">{formatDateTime(detailReturn.createdAt)}</span></div>
+                <div><span className="text-muted-foreground">Completed:</span> <span className="font-mono">{formatDateTime(detailReturn.completedAt)}</span></div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
