@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { usePosStore } from '@/stores/posStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
@@ -14,16 +15,27 @@ import {
   Search, Plus, Package, Tag, ShoppingCart,
   RotateCcw, Trash2, Eye, Edit2, Archive,
   CheckCircle2, Ban, MapPin, AlertCircle, Printer, History, ArrowRight,
+  LayoutList, ArrowUpDown, ArrowUp, ArrowDown,
 } from 'lucide-react';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/taxCalc';
+import {
+  filterInventoryByStatus,
+  getInventoryLifecycleLabel,
+  matchesInventorySearch,
+  sortInventoryItems,
+  type InventorySortColumn,
+  type InventorySortDirection,
+  type InventoryStatusFilter,
+} from '@/lib/inventorySearch';
 import { CATEGORIES, INVENTORY_STATUSES } from '@/constants/config';
 import BarcodeLabelDialog from '@/components/features/BarcodeLabelDialog';
 import LocationAssignmentDialog from '@/components/features/LocationAssignmentDialog';
 import type { InventoryStatus, InventoryItem, LocationHistoryEntry } from '@/types';
 
-type Section = 'non-listed' | 'available' | 'sold' | 'returned' | 'scrapped';
+type Section = 'all' | 'non-listed' | 'available' | 'sold' | 'returned' | 'scrapped';
 
 const SECTIONS: { key: Section; label: string; icon: typeof Package; description: string }[] = [
+  { key: 'all', label: 'All Inventory', icon: LayoutList, description: 'View and search every item across all inventory statuses' },
   { key: 'non-listed', label: 'Not Listed', icon: Package, description: 'Received items not yet on the floor' },
   { key: 'available', label: 'Live Products', icon: CheckCircle2, description: 'Ready for sale on the floor' },
   { key: 'sold', label: 'Sold Items', icon: ShoppingCart, description: 'Completed sales' },
@@ -31,11 +43,12 @@ const SECTIONS: { key: Section; label: string; icon: typeof Package; description
   { key: 'scrapped', label: 'Scrapped Items', icon: Ban, description: 'Damaged, unusable, discarded' },
 ];
 
-function getStatusBadge(status: InventoryStatus) {
+function getStatusBadge(status: InventoryStatus, lifecycleLabel = false) {
   const cfg = INVENTORY_STATUSES.find((s) => s.value === status);
+  const label = lifecycleLabel ? getInventoryLifecycleLabel(status) : (cfg?.label || status);
   return (
     <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border capitalize ${cfg?.color || 'text-slate-600 bg-slate-50 border-slate-200'}`}>
-      {cfg?.label || status}
+      {label}
     </span>
   );
 }
@@ -44,12 +57,16 @@ export default function InventoryPage() {
   const { employee, store } = useAuthStore();
   const pos = usePosStore();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
-  const [activeSection, setActiveSection] = useState<Section>('non-listed');
+  const [activeSection, setActiveSection] = useState<Section>('all');
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('all');
   const [locationFilter, setLocationFilter] = useState('all');
   const [labelFilter, setLabelFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<InventoryStatusFilter>('all');
+  const [sortColumn, setSortColumn] = useState<InventorySortColumn>('received');
+  const [sortDirection, setSortDirection] = useState<InventorySortDirection>('desc');
   const [showAdd, setShowAdd] = useState(false);
   const [showDetail, setShowDetail] = useState<InventoryItem | null>(null);
   const [showEdit, setShowEdit] = useState(false);
@@ -77,10 +94,34 @@ export default function InventoryPage() {
     costPerUnit: 0, expectedSalePrice: 0, notes: '',
   });
 
+  // Sale enrichment maps for All Inventory search and sorting
+  const saleExtrasByItemId = useMemo(() => {
+    const map = new Map<string, { saleCode: string; saleId: string; customerName: string; soldPrice: number }>();
+    for (const si of pos.saleItems) {
+      const sale = pos.sales.find((s) => s.id === si.salesTransactionId);
+      if (!sale) continue;
+      const cust = sale.customerId ? pos.customers.find((c) => c.id === sale.customerId) : null;
+      map.set(si.inventoryItemId, {
+        saleCode: sale.saleCode,
+        saleId: sale.id,
+        customerName: cust ? `${cust.firstName} ${cust.lastName}` : 'Walk-in',
+        soldPrice: si.unitPrice,
+      });
+    }
+    return map;
+  }, [pos.saleItems, pos.sales, pos.customers]);
+
+  const soldPriceByItemId = useMemo(() => {
+    const map = new Map<string, number>();
+    saleExtrasByItemId.forEach((extras, id) => map.set(id, extras.soldPrice));
+    return map;
+  }, [saleExtrasByItemId]);
+
   // Counts per section
   const counts = useMemo(() => {
     const inv = pos.inventory;
     return {
+      all: inv.length,
       'non-listed': inv.filter((i) => i.status === 'available' && i.quantityOnHand > 0).length,
       available: inv.filter((i) => i.status === 'listed' && i.quantityOnHand > 0).length,
       sold: inv.filter((i) => i.status === 'sold').length,
@@ -93,6 +134,9 @@ export default function InventoryPage() {
   const sectionItems = useMemo(() => {
     let items: InventoryItem[] = [];
     switch (activeSection) {
+      case 'all':
+        items = [...pos.inventory];
+        break;
       case 'non-listed':
         items = pos.inventory.filter((i) => i.status === 'available' && i.quantityOnHand > 0);
         break;
@@ -110,7 +154,16 @@ export default function InventoryPage() {
         break;
     }
 
-    if (search.trim()) {
+    if (activeSection === 'all') {
+      if (search.trim()) {
+        items = items.filter((i) =>
+          matchesInventorySearch(i, search, saleExtrasByItemId.get(i.id)),
+        );
+      }
+      if (statusFilter !== 'all') {
+        items = items.filter((i) => filterInventoryByStatus(i, statusFilter));
+      }
+    } else if (search.trim()) {
       const q = search.toLowerCase();
       items = items.filter((i) =>
         i.brand.toLowerCase().includes(q) ||
@@ -131,8 +184,12 @@ export default function InventoryPage() {
     if (labelFilter === 'generated') items = items.filter((i) => i.labelGenerated);
     else if (labelFilter === 'pending') items = items.filter((i) => !i.labelGenerated);
 
+    if (activeSection === 'all') {
+      items = sortInventoryItems(items, sortColumn, sortDirection, soldPriceByItemId);
+    }
+
     return items;
-  }, [pos.inventory, activeSection, search, catFilter, locationFilter, labelFilter]);
+  }, [pos.inventory, activeSection, search, catFilter, locationFilter, labelFilter, statusFilter, sortColumn, sortDirection, saleExtrasByItemId, soldPriceByItemId]);
 
   // Unique locations for filter
   const uniqueLocations = useMemo(() => {
@@ -326,10 +383,25 @@ export default function InventoryPage() {
     };
   };
 
-  // Render action buttons per section
+  // Render action buttons per item status (All Inventory uses item status; other sections use active section)
+  const getActionContext = (item: InventoryItem): Section | 'reserved' | 'defective' => {
+    if (activeSection !== 'all') return activeSection;
+    switch (item.status) {
+      case 'available': return 'non-listed';
+      case 'listed': return 'available';
+      case 'sold': return 'sold';
+      case 'returned': return 'returned';
+      case 'scrapped': return 'scrapped';
+      case 'reserved': return 'reserved';
+      case 'defective': return 'defective';
+      default: return 'scrapped';
+    }
+  };
+
   const renderActions = (item: InventoryItem) => {
     const needsSetup = !item.storageLocation || !item.labelGenerated;
-    switch (activeSection) {
+    const ctx = getActionContext(item);
+    switch (ctx) {
       case 'non-listed':
         return (
           <div className="flex items-center gap-1">
@@ -370,9 +442,16 @@ export default function InventoryPage() {
         );
       case 'sold':
         return (
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openDetail(item)}>
-            <Eye className="size-3.5" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openDetail(item)} title="View sale">
+              <Eye className="size-3.5" />
+            </Button>
+            {activeSection === 'all' && (
+              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => navigate('/pos/returns')} title="Start return">
+                <RotateCcw className="size-3.5" />
+              </Button>
+            )}
+          </div>
         );
       case 'returned':
         return (
@@ -389,6 +468,8 @@ export default function InventoryPage() {
           </div>
         );
       case 'scrapped':
+      case 'reserved':
+      case 'defective':
         return (
           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openDetail(item)}>
             <Eye className="size-3.5" />
@@ -399,9 +480,52 @@ export default function InventoryPage() {
     }
   };
 
+  const handleSort = (col: InventorySortColumn) => {
+    if (sortColumn === col) {
+      setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(col);
+      setSortDirection(col === 'received' ? 'desc' : 'asc');
+    }
+  };
+
+  const SortIcon = ({ col }: { col: InventorySortColumn }) => {
+    if (sortColumn !== col) return <ArrowUpDown className="size-3 ml-0.5 opacity-40" />;
+    return sortDirection === 'asc'
+      ? <ArrowUp className="size-3 ml-0.5" />
+      : <ArrowDown className="size-3 ml-0.5" />;
+  };
+
+  const SortableHead = ({ col, children, className = '' }: { col: InventorySortColumn; children: ReactNode; className?: string }) => (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => handleSort(col)}
+        className="inline-flex items-center hover:text-foreground cursor-pointer"
+      >
+        {children}
+        <SortIcon col={col} />
+      </button>
+    </TableHead>
+  );
+
+  const resetSectionFilters = (section: Section) => {
+    setActiveSection(section);
+    setSearch('');
+    setCatFilter('all');
+    setLocationFilter('all');
+    setLabelFilter('all');
+    setStatusFilter('all');
+    if (section === 'all') {
+      setSortColumn('received');
+      setSortDirection('desc');
+    }
+  };
+
   const sectionCfg = SECTIONS.find((s) => s.key === activeSection)!;
-  const showLocationCol = activeSection !== 'sold';
-  const showLabelCol = activeSection === 'non-listed' || activeSection === 'available';
+  const isAllSection = activeSection === 'all';
+  const showLocationCol = activeSection !== 'sold' || isAllSection;
+  const showLabelCol = activeSection === 'non-listed' || activeSection === 'available' || isAllSection;
 
   return (
     <div className="flex gap-5 h-[calc(100vh-112px)]">
@@ -446,7 +570,7 @@ export default function InventoryPage() {
             return (
               <button
                 key={section.key}
-                onClick={() => { setActiveSection(section.key); setSearch(''); setCatFilter('all'); setLocationFilter('all'); setLabelFilter('all'); }}
+                onClick={() => resetSectionFilters(section.key)}
                 className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[12px] font-medium transition-all cursor-pointer ${
                   isActive
                     ? 'bg-primary text-white shadow-sm'
@@ -491,8 +615,28 @@ export default function InventoryPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative flex-1 max-w-sm min-w-[180px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-                <Input placeholder="Search brand, model, code, IMEI, location…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9 text-[12px]" />
+                <Input
+                  placeholder={isAllSection
+                    ? 'Search product, device ID, IMEI, status, sale ID…'
+                    : 'Search brand, model, code, IMEI, location…'}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9 h-9 text-[12px]"
+                />
               </div>
+              {isAllSection && (
+                <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as InventoryStatusFilter)}>
+                  <SelectTrigger className="h-9 w-36 text-[11px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="available">Non-Listed</SelectItem>
+                    <SelectItem value="listed">Live</SelectItem>
+                    <SelectItem value="sold">Sold</SelectItem>
+                    <SelectItem value="returned">Returned</SelectItem>
+                    <SelectItem value="scrapped">Scrapped</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <Select value={catFilter} onValueChange={setCatFilter}>
                 <SelectTrigger className="h-9 w-36 text-[11px]"><SelectValue placeholder="Category" /></SelectTrigger>
                 <SelectContent>
@@ -533,23 +677,51 @@ export default function InventoryPage() {
                 <TableHeader>
                   <TableRow className="text-[10px]">
                     <TableHead className="w-24">Device ID</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead className="w-20">Category</TableHead>
-                    {showLocationCol && <TableHead className="w-24">Location</TableHead>}
-                    {showLabelCol && <TableHead className="w-24">Label</TableHead>}
-                    {activeSection !== 'sold' && <TableHead className="w-20 text-right">Cost</TableHead>}
-                    <TableHead className="w-16 text-center">Qty</TableHead>
-                    <TableHead className="w-24 text-right">{activeSection === 'sold' ? 'Sold Price' : 'Sale Price'}</TableHead>
-                    {activeSection === 'sold' && <TableHead className="w-20 text-right">Profit</TableHead>}
-                    {activeSection === 'sold' && <TableHead className="w-28">Customer</TableHead>}
-                    <TableHead className="w-20">Status</TableHead>
-                    <TableHead className="w-24">{activeSection === 'sold' ? 'Sold' : 'Received'}</TableHead>
+                    {isAllSection ? (
+                      <>
+                        <SortableHead col="product">Product</SortableHead>
+                        <SortableHead col="category" className="w-20">Category</SortableHead>
+                        <TableHead className="w-24">Location</TableHead>
+                        <TableHead className="w-24">Label</TableHead>
+                        <SortableHead col="cost" className="w-20 text-right justify-end w-full">Cost</SortableHead>
+                        <SortableHead col="quantity" className="w-16 text-center justify-center w-full">Qty</SortableHead>
+                        <SortableHead col="salePrice" className="w-24 text-right justify-end w-full">Sale Price</SortableHead>
+                        <SortableHead col="status" className="w-20">Status</SortableHead>
+                        <SortableHead col="received" className="w-24">Received</SortableHead>
+                      </>
+                    ) : (
+                      <>
+                        <TableHead>Product</TableHead>
+                        <TableHead className="w-20">Category</TableHead>
+                        {showLocationCol && <TableHead className="w-24">Location</TableHead>}
+                        {showLabelCol && <TableHead className="w-24">Label</TableHead>}
+                        {activeSection !== 'sold' && <TableHead className="w-20 text-right">Cost</TableHead>}
+                        <TableHead className="w-16 text-center">Qty</TableHead>
+                        <TableHead className="w-24 text-right">{activeSection === 'sold' ? 'Sold Price' : 'Sale Price'}</TableHead>
+                        {activeSection === 'sold' && <TableHead className="w-20 text-right">Profit</TableHead>}
+                        {activeSection === 'sold' && <TableHead className="w-28">Customer</TableHead>}
+                        <TableHead className="w-20">Status</TableHead>
+                        <TableHead className="w-24">{activeSection === 'sold' ? 'Sold' : 'Received'}</TableHead>
+                      </>
+                    )}
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {sectionItems.map((item) => {
-                    const soldInfo = activeSection === 'sold' ? getSoldInfo(item) : null;
+                    const soldInfo = activeSection === 'sold' || isAllSection
+                      ? (getSoldInfo(item) ?? (saleExtrasByItemId.has(item.id) ? {
+                          saleCode: saleExtrasByItemId.get(item.id)!.saleCode,
+                          soldPrice: saleExtrasByItemId.get(item.id)!.soldPrice,
+                          soldDate: item.soldAt || item.acquiredAt,
+                          employee: '—',
+                          customer: saleExtrasByItemId.get(item.id)!.customerName,
+                          profit: saleExtrasByItemId.get(item.id)!.soldPrice - item.costPerUnit,
+                        } : null))
+                      : null;
+                    const displayDate = isAllSection && item.status === 'sold' && soldInfo
+                      ? soldInfo.soldDate
+                      : item.acquiredAt;
                     return (
                       <TableRow key={item.id} className="text-[12px] group">
                         <TableCell className="font-mono text-[10px] text-muted-foreground">{item.deviceCode}</TableCell>
@@ -558,7 +730,7 @@ export default function InventoryPage() {
                           {item.serialImei && <p className="text-[9px] text-muted-foreground font-mono">IMEI: {item.serialImei}</p>}
                         </TableCell>
                         <TableCell className="text-[11px]">{item.category}</TableCell>
-                        {showLocationCol && (
+                        {(showLocationCol || isAllSection) && (
                           <TableCell>
                             {item.storageLocation ? (
                               <Badge variant="outline" className="font-mono text-[10px] bg-blue-50 text-blue-700 border-blue-200">
@@ -571,7 +743,7 @@ export default function InventoryPage() {
                             )}
                           </TableCell>
                         )}
-                        {showLabelCol && (
+                        {(showLabelCol || isAllSection) && (
                           <TableCell>
                             {item.labelGenerated ? (
                               <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
@@ -585,7 +757,7 @@ export default function InventoryPage() {
                             )}
                           </TableCell>
                         )}
-                        {activeSection !== 'sold' && (
+                        {(activeSection !== 'sold' || isAllSection) && (
                           <TableCell className="text-right font-mono tabular-nums text-[11px] text-muted-foreground">{formatCurrency(item.costPerUnit)}</TableCell>
                         )}
                         <TableCell className="text-center">
@@ -596,19 +768,21 @@ export default function InventoryPage() {
                         <TableCell className="text-right font-mono tabular-nums font-semibold text-primary">
                           {soldInfo ? formatCurrency(soldInfo.soldPrice) : formatCurrency(item.expectedSalePrice)}
                         </TableCell>
-                        {activeSection === 'sold' && (
+                        {activeSection === 'sold' && !isAllSection && (
                           <TableCell className="text-right">
                             <span className={`font-mono tabular-nums font-semibold text-[11px] ${(soldInfo?.profit || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                               {soldInfo ? formatCurrency(soldInfo.profit) : '—'}
                             </span>
                           </TableCell>
                         )}
-                        {activeSection === 'sold' && (
+                        {activeSection === 'sold' && !isAllSection && (
                           <TableCell className="text-[11px] truncate max-w-[120px]">{soldInfo?.customer || '—'}</TableCell>
                         )}
-                        <TableCell>{getStatusBadge(item.status)}</TableCell>
+                        <TableCell>{getStatusBadge(item.status, isAllSection)}</TableCell>
                         <TableCell className="text-[11px] text-muted-foreground">
-                          {activeSection === 'sold' && soldInfo ? formatDate(soldInfo.soldDate) : formatDate(item.acquiredAt)}
+                          {activeSection === 'sold' && soldInfo && !isAllSection
+                            ? formatDate(soldInfo.soldDate)
+                            : formatDate(displayDate)}
                         </TableCell>
                         <TableCell className="text-right">{renderActions(item)}</TableCell>
                       </TableRow>
@@ -620,6 +794,7 @@ export default function InventoryPage() {
                         <Package className="size-12 mx-auto text-muted-foreground/15 mb-3" />
                         <p className="text-[13px] text-muted-foreground font-medium">No items in this section</p>
                         <p className="text-[11px] text-muted-foreground mt-1">
+                          {activeSection === 'all' && 'No inventory records match your search or filters.'}
                           {activeSection === 'non-listed' && 'Items received from purchases will appear here.'}
                           {activeSection === 'available' && 'Items moved to Live Products will appear here.'}
                           {activeSection === 'sold' && 'Completed sales will move items here.'}
