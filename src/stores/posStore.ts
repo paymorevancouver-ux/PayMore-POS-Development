@@ -22,6 +22,7 @@ interface PosState {
   // Loading
   isLoading: boolean;
   isLoaded: boolean;
+  loadError: string | null;
   activeStoreId: string | null;
 
   // Data
@@ -142,6 +143,7 @@ export const usePosStore = create<PosState>()(
   (set, get) => ({
     isLoading: false,
     isLoaded: false,
+    loadError: null,
     activeStoreId: null,
     customers: [],
     visits: [],
@@ -162,7 +164,7 @@ export const usePosStore = create<PosState>()(
 
     // ── Load all store data from DB ──
     loadStoreData: async (storeId: string) => {
-      set({ isLoading: true });
+      set({ isLoading: true, loadError: null });
       console.log(`[POS] Loading data for store ${storeId}...`);
 
       try {
@@ -246,6 +248,7 @@ export const usePosStore = create<PosState>()(
         set({
           isLoading: false,
           isLoaded: true,
+          loadError: null,
           activeStoreId: storeId,
           customers, visits, purchases, purchaseItems, purchasePayments,
           inventory, sales, saleItems, salePayments,
@@ -257,7 +260,11 @@ export const usePosStore = create<PosState>()(
         console.log(`[POS] Loaded: ${customers.length} customers, ${inventory.length} inventory, ${sales.length} sales`);
       } catch (err) {
         console.error('[POS] Load error:', err);
-        set({ isLoading: false });
+        set({
+          isLoading: false,
+          isLoaded: false,
+          loadError: 'Could not connect to the database. Please check your connection and try again.',
+        });
       }
     },
 
@@ -812,6 +819,7 @@ export const usePosStore = create<PosState>()(
         returns: [], paymentChanges: [], purchaseChanges: [],
         cashDrawer: emptyDrawer, auditLog: [], labels: [],
         isLoaded: false,
+        loadError: null,
       });
     },
   })

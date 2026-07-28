@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { usePosStore } from '@/stores/posStore';
 import { Toaster } from '@/components/ui/toaster';
+import { Button } from '@/components/ui/button';
 import AppShell from '@/components/layout/AppShell';
 import ProtectedRoute from '@/components/features/ProtectedRoute';
 import LoginPage from '@/pages/LoginPage';
@@ -19,13 +21,59 @@ import ReportsPage from '@/pages/ReportsPage';
 import SettingsPage from '@/pages/SettingsPage';
 import AuditPage from '@/pages/AuditPage';
 import UserManagementPage from '@/pages/UserManagementPage';
-import { Loader2 } from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore();
-  const { isLoading, isLoaded } = usePosStore();
+  const { isAuthenticated, store, logout } = useAuthStore();
+  const {
+    isLoading,
+    isLoaded,
+    loadError,
+    activeStoreId,
+    loadStoreData,
+  } = usePosStore();
+
+  useEffect(() => {
+    if (
+      isAuthenticated &&
+      store?.id &&
+      !isLoading &&
+      !loadError &&
+      (!isLoaded || activeStoreId !== store.id)
+    ) {
+      void loadStoreData(store.id);
+    }
+  }, [
+    isAuthenticated,
+    store?.id,
+    isLoading,
+    isLoaded,
+    loadError,
+    activeStoreId,
+    loadStoreData,
+  ]);
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-6">
+        <div className="text-center max-w-sm">
+          <AlertCircle className="size-10 text-destructive mx-auto mb-3" />
+          <h2 className="text-lg font-semibold text-foreground mb-1">Unable to load store data</h2>
+          <p className="text-sm text-muted-foreground mb-6">{loadError}</p>
+          <div className="flex flex-col sm:flex-row gap-2 justify-center">
+            <Button onClick={() => store?.id && void loadStoreData(store.id)}>
+              Retry
+            </Button>
+            <Button variant="outline" onClick={() => logout()}>
+              Log Out
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Show loading while store data is being fetched from DB
   if (isLoading || !isLoaded) {
