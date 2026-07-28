@@ -85,7 +85,7 @@ interface PosState {
 
   // Returns
   createReturn: (data: Omit<Return, 'id' | 'returnCode' | 'createdAt' | 'completedAt' | 'status'>) => string;
-  completeReturn: (returnId: string, employeeName: string) => void;
+  completeReturn: (returnId: string, employeeName: string, returnQuantity?: number) => void;
 
   // Payment Changes
   createPaymentChange: (data: Omit<PaymentChange, 'id' | 'createdAt' | 'completedAt' | 'status'>) => string;
@@ -652,7 +652,7 @@ export const usePosStore = create<PosState>()(
       db.insertReturn(data.storeId, ret);
       return id;
     },
-    completeReturn: (returnId, employeeName) => {
+    completeReturn: (returnId, employeeName, returnQuantity) => {
       const state = get();
       const ret = state.returns.find((r) => r.id === returnId);
       if (!ret) return;
@@ -665,7 +665,8 @@ export const usePosStore = create<PosState>()(
         if (saleItem?.inventoryItemId) {
           const inv = state.inventory.find((i) => i.id === saleItem.inventoryItemId);
           if (inv) {
-            const restored = applyInventoryReturn(inv.quantityOnHand, saleItem.quantity, inv.status);
+            const qty = returnQuantity ?? saleItem.quantity;
+            const restored = applyInventoryReturn(inv.quantityOnHand, qty, inv.status);
             get().updateInventoryItem(saleItem.inventoryItemId, restored);
           }
         }
