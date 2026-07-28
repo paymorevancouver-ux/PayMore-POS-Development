@@ -102,7 +102,7 @@ export default function SalesInvoiceDialog({
               <h1 style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 2, color: '#000' }}>SALES INVOICE</h1>
               <p style={{ fontSize: 13, fontWeight: 'bold', color: '#000' }}>{store.name}</p>
               <p style={{ fontSize: 10, color: '#555' }}>{store.address}</p>
-              <p style={{ fontSize: 10, color: '#555' }}>{store.phone} · GST# {store.gstNumber} · PST# {store.pstNumber}</p>
+              <p style={{ fontSize: 10, color: '#555' }}>{store.phone} · GST Number: {store.gstNumber}</p>
             </div>
 
             {/* Meta row */}

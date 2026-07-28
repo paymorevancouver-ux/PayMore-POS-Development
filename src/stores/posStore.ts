@@ -174,8 +174,8 @@ export const usePosStore = create<PosState>()(
           STORE_ID,
           'PayMore Vancouver',
           '4534 Main St, Vancouver, BC',
-          '(604) 555-0202',
-          'GST-827461954',
+          '778-375-5900',
+          '755658960RT0001',
           'PST-103847262',
         );
 

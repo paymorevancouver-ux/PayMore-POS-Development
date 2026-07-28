@@ -18,7 +18,7 @@ export default function ReceiptPreview({ sale, saleItems, onPrint }: ReceiptPrev
           <p className="font-bold text-base">PAYMORE</p>
           <p className="text-[11px] text-muted-foreground">{store?.address}</p>
           <p className="text-[11px] text-muted-foreground">Tel: {store?.phone}</p>
-          <p className="text-[11px] text-muted-foreground">GST# {store?.gstNumber}</p>
+          <p className="text-[11px] text-muted-foreground">GST Number: {store?.gstNumber}</p>
           <div className="border-t border-dashed border-border mt-3 pt-2">
             <p className="font-bold">SALES RECEIPT</p>
             <p className="text-[11px]">{sale.saleCode}</p>

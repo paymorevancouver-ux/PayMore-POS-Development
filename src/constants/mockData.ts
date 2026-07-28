@@ -12,8 +12,8 @@ export const STORES: Store[] = [
     id: STORE_ID,
     name: 'PayMore Vancouver',
     address: '4534 Main St, Vancouver, BC',
-    phone: '(604) 555-0202',
-    gstNumber: 'GST-827461954',
+    phone: '778-375-5900',
+    gstNumber: '755658960RT0001',
     pstNumber: 'PST-103847262',
   },
 ];
