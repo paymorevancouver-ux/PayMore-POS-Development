@@ -1,5 +1,23 @@
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+export const GEMINI_MODEL = 'gemini-3.6-flash';
+export const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+export const GEMINI_SAFE_ERROR_MESSAGE =
+  'Gemini OCR service failed. Please retry or contact support.';
+
+export class GeminiOcrError extends Error {
+  httpStatus?: number;
+  geminiCode?: string;
+
+  constructor(
+    message: string = GEMINI_SAFE_ERROR_MESSAGE,
+    httpStatus?: number,
+    geminiCode?: string,
+  ) {
+    super(message);
+    this.name = 'GeminiOcrError';
+    this.httpStatus = httpStatus;
+    this.geminiCode = geminiCode;
+  }
+}
 
 function parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -9,13 +27,19 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
   return { mimeType: match[1], data: match[2] };
 }
 
+function logGeminiFailure(httpStatus: number, geminiCode?: string) {
+  console.error(
+    `Gemini API error: status=${httpStatus} code=${geminiCode ?? 'unknown'} model=${GEMINI_MODEL}`,
+  );
+}
+
 export async function callGeminiWithImages(
   prompt: string,
   imageDataUrls: string[],
 ): Promise<string> {
   const apiKey = Deno.env.get('GEMINI_API_KEY');
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured');
+    throw new GeminiOcrError('Gemini OCR is not configured. Please contact support.');
   }
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
@@ -32,19 +56,30 @@ export async function callGeminiWithImages(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
-      generationConfig: { temperature: 0.1 },
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      },
     }),
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${errText}`);
+    let geminiCode: string | undefined;
+    try {
+      const errJson = await response.json();
+      geminiCode = errJson?.error?.status || errJson?.error?.code;
+    } catch {
+      // Ignore parse errors — only log status/code/model
+    }
+    logGeminiFailure(response.status, geminiCode);
+    throw new GeminiOcrError(GEMINI_SAFE_ERROR_MESSAGE, response.status, geminiCode);
   }
 
   const result = await response.json();
   const text = result.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   if (!text) {
-    throw new Error('Empty response from Gemini API');
+    console.error(`Gemini API error: status=200 code=empty_response model=${GEMINI_MODEL}`);
+    throw new GeminiOcrError(GEMINI_SAFE_ERROR_MESSAGE);
   }
 
   return text;
@@ -61,4 +96,8 @@ export function parseJsonFromGeminiResponse(rawContent: string): unknown {
     cleaned = cleaned.slice(0, -3);
   }
   return JSON.parse(cleaned.trim());
+}
+
+export function isGeminiOcrError(err: unknown): err is GeminiOcrError {
+  return err instanceof GeminiOcrError;
 }

@@ -1,5 +1,10 @@
 import { corsHeaders } from '../_shared/cors.ts';
-import { callGeminiWithImages, parseJsonFromGeminiResponse } from '../_shared/gemini.ts';
+import {
+  callGeminiWithImages,
+  GEMINI_SAFE_ERROR_MESSAGE,
+  isGeminiOcrError,
+  parseJsonFromGeminiResponse,
+} from '../_shared/gemini.ts';
 
 const EXTRACTION_PROMPT = `You are an ID document data extraction assistant. Analyze the provided ID card/driver's license photo(s) and extract all visible personal information.
 
@@ -34,7 +39,6 @@ Rules:
 - Return ONLY the JSON object, no markdown, no explanation, no other text.`;
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -45,11 +49,11 @@ Deno.serve(async (req) => {
     if (!frontImage) {
       return new Response(
         JSON.stringify({ error: 'At least a front ID image is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    console.log('Extracting ID data from images...');
+    console.log('Extracting ID data from images');
     console.log('Front image provided:', !!frontImage);
     console.log('Back image provided:', !!backImage);
 
@@ -59,36 +63,37 @@ Deno.serve(async (req) => {
     }
 
     const rawContent = await callGeminiWithImages(EXTRACTION_PROMPT, images);
-    console.log('AI raw response:', rawContent);
+    console.log('AI response received, length:', rawContent.length);
 
     let extracted;
     try {
       extracted = parseJsonFromGeminiResponse(rawContent);
-    } catch (parseErr) {
-      console.error('Failed to parse AI response as JSON:', rawContent);
+    } catch {
+      console.error('Failed to parse AI response as JSON');
       return new Response(
-        JSON.stringify({ error: 'Failed to parse extracted data', raw: rawContent }),
-        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Failed to parse extracted data. Please retry.' }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    console.log('Extracted data:', JSON.stringify(extracted));
+    console.log('ID extraction completed successfully');
 
     return new Response(
       JSON.stringify({ success: true, data: extracted }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
-
   } catch (err) {
-    console.error('Edge function error:', err);
-    const message = (err as Error).message;
+    if (isGeminiOcrError(err)) {
+      return new Response(
+        JSON.stringify({ error: err.message }),
+        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
+    console.error('Edge function error:', (err as Error).name);
     return new Response(
-      JSON.stringify({
-        error: message.startsWith('Gemini API error')
-          ? `AI extraction failed: ${message}`
-          : `Server error: ${message}`,
-      }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: GEMINI_SAFE_ERROR_MESSAGE }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });
