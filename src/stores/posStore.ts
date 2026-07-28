@@ -17,6 +17,7 @@ import { db } from '@/lib/database';
 import { useEbayStore } from '@/stores/ebayStore';
 import { PROD_SETTINGS } from '@/constants/migrationData';
 import { STORE_ID } from '@/constants/mockData';
+import { applyInventoryReturn, applyInventorySaleDeduction, validateSaleQuantity } from '@/lib/inventorySale';
 
 interface PosState {
   // Loading
@@ -79,7 +80,7 @@ interface PosState {
   removeSaleItem: (saleId: string, itemId: string) => void;
   addSalePayment: (saleId: string, method: PaymentMethod, amount: number, reference?: string) => void;
   removeSalePayment: (paymentId: string) => void;
-  completeSale: (saleId: string, employeeName: string) => void;
+  completeSale: (saleId: string, employeeName: string) => { success: boolean; error?: string };
   voidSale: (saleId: string) => void;
 
   // Returns
@@ -573,17 +574,47 @@ export const usePosStore = create<PosState>()(
     completeSale: (saleId, employeeName) => {
       const state = get();
       const sale = state.sales.find((sl) => sl.id === saleId);
-      if (!sale) return;
+      if (!sale) return { success: false, error: 'Sale not found' };
+      if (sale.status !== 'draft') return { success: false, error: 'Sale has already been completed' };
+
       const items = state.saleItems.filter((i) => i.salesTransactionId === saleId);
       const payments = state.salePayments.filter((p) => p.transactionId === saleId);
+
+      for (const item of items) {
+        if (!item.inventoryItemId) continue;
+        const inv = state.inventory.find((i) => i.id === item.inventoryItemId);
+        if (!inv) {
+          return { success: false, error: `Inventory item not found for ${item.brand} ${item.model}` };
+        }
+        const validation = validateSaleQuantity(item.quantity, inv.quantityOnHand);
+        if (!validation.valid) {
+          return { success: false, error: validation.message };
+        }
+      }
 
       const completedAt = new Date().toISOString();
       set((s) => ({ sales: s.sales.map((sl) => sl.id === saleId ? { ...sl, status: 'completed' as const, completedAt } : sl) }));
       db.updateSale(saleId, { status: 'completed', completedAt });
 
       items.forEach((item) => {
-        if (item.inventoryItemId) {
-          get().updateInventoryItem(item.inventoryItemId, { status: 'sold', soldAt: completedAt, quantityOnHand: 0 });
+        if (!item.inventoryItemId) return;
+        const inv = get().inventory.find((i) => i.id === item.inventoryItemId);
+        if (!inv) return;
+
+        const deduction = applyInventorySaleDeduction(
+          inv.quantityOnHand,
+          item.quantity,
+          inv.status,
+          completedAt,
+        );
+
+        get().updateInventoryItem(item.inventoryItemId, {
+          quantityOnHand: deduction.quantityOnHand,
+          status: deduction.status,
+          soldAt: deduction.soldAt,
+        });
+
+        if (deduction.fullySold) {
           try {
             const ebayStore = useEbayStore.getState();
             const ebayListing = ebayStore.getListingByInventoryId(item.inventoryItemId);
@@ -595,23 +626,22 @@ export const usePosStore = create<PosState>()(
         }
       });
 
-      // Cash drawer — only CASH payments
       const cashTotal = round2(payments.filter((p) => p.method === 'cash').reduce((s2, p) => s2 + p.amount, 0));
       if (cashTotal > 0) {
         get().addDrawerEntry('sale', cashTotal, `Sale ${sale.saleCode} — Cash portion`, sale.employeeId, sale.storeId, 'sale', saleId);
       }
 
+      const soldUnits = items.reduce((sum, i) => sum + i.quantity, 0);
       get().logAction(sale.employeeId, employeeName, 'Sales', 'SALE_COMPLETE', 'sale', saleId,
-        `Sale ${sale.saleCode} — $${sale.totalAmount.toFixed(2)} (${items.length} items)`);
+        `Sale ${sale.saleCode} — $${sale.totalAmount.toFixed(2)} (${soldUnits} units)`);
+
+      return { success: true };
     },
     voidSale: (saleId) => {
-      const state = get();
-      const items = state.saleItems.filter((i) => i.salesTransactionId === saleId);
+      const sale = get().sales.find((sl) => sl.id === saleId);
+      if (!sale || sale.status !== 'draft') return;
       set((s) => ({ sales: s.sales.map((sl) => sl.id === saleId ? { ...sl, status: 'voided' as const } : sl) }));
       db.updateSale(saleId, { status: 'voided' });
-      items.forEach((item) => {
-        if (item.inventoryItemId) get().updateInventoryItem(item.inventoryItemId, { status: 'available', soldAt: null, quantityOnHand: 1 });
-      });
     },
 
     // ── Returns ──
@@ -633,7 +663,11 @@ export const usePosStore = create<PosState>()(
       if (ret.sourceItemId) {
         const saleItem = state.saleItems.find((i) => i.id === ret.sourceItemId);
         if (saleItem?.inventoryItemId) {
-          get().updateInventoryItem(saleItem.inventoryItemId, { status: 'returned', soldAt: null, quantityOnHand: 1 });
+          const inv = state.inventory.find((i) => i.id === saleItem.inventoryItemId);
+          if (inv) {
+            const restored = applyInventoryReturn(inv.quantityOnHand, saleItem.quantity, inv.status);
+            get().updateInventoryItem(saleItem.inventoryItemId, restored);
+          }
         }
       }
 

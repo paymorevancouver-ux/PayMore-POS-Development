@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useToast } from '@/hooks/use-toast';
 import { Search, Plus, ShoppingCart, Trash2, Receipt, DollarSign, X, Printer, History } from 'lucide-react';
 import { formatCurrency, formatDateTime, round2 } from '@/lib/taxCalc';
+import { validateSaleQuantity } from '@/lib/inventorySale';
 import { TAX_MODES, PAYMENT_METHODS } from '@/constants/config';
 import SalesInvoiceDialog from '@/components/features/SalesInvoiceDialog';
 import type { TaxMode, PaymentMethod, SaleTransaction } from '@/types';
@@ -37,6 +38,7 @@ export default function SalesPage() {
   // Reprint history
   const [showHistory, setShowHistory] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
+  const [completing, setCompleting] = useState(false);
 
   const activeSale = pos.sales.find((s) => s.id === activeSaleId && s.status === 'draft');
   const activeSaleItems = useMemo(() => activeSaleId ? pos.saleItems.filter((i) => i.salesTransactionId === activeSaleId) : [], [pos.saleItems, activeSaleId]);
@@ -109,17 +111,51 @@ export default function SalesPage() {
     setPayRef('');
   };
 
+  const getAvailableQuantity = (inventoryItemId: string) =>
+    pos.inventory.find((i) => i.id === inventoryItemId)?.quantityOnHand ?? 0;
+
+  const handleUpdateQuantity = (lineId: string, inventoryItemId: string | undefined, rawQty: number) => {
+    if (!activeSaleId) return;
+    const qty = Math.max(1, rawQty);
+
+    if (inventoryItemId) {
+      const available = getAvailableQuantity(inventoryItemId);
+      const validation = validateSaleQuantity(qty, available);
+      if (!validation.valid) {
+        toast({ variant: 'destructive', title: validation.message });
+        return;
+      }
+    }
+
+    pos.updateSaleItem(activeSaleId, lineId, { quantity: qty });
+  };
+
   const handleComplete = () => {
+    if (completing) return;
     if (!activeSaleId || !activeSale || activeSaleItems.length === 0) { toast({ variant: 'destructive', title: 'Cart is empty' }); return; }
     if (remaining > 0.01) { toast({ variant: 'destructive', title: 'Payment incomplete', description: `Still owed: ${formatCurrency(remaining)}` }); return; }
     if (!employee) return;
 
-    // Get the sale data before completing (it will change status)
+    for (const line of activeSaleItems) {
+      if (!line.inventoryItemId) continue;
+      const available = getAvailableQuantity(line.inventoryItemId);
+      const validation = validateSaleQuantity(line.quantity, available);
+      if (!validation.valid) {
+        toast({ variant: 'destructive', title: `${line.brand} ${line.model}`, description: validation.message });
+        return;
+      }
+    }
+
+    setCompleting(true);
     const saleForInvoice = { ...activeSale };
+    const result = pos.completeSale(activeSaleId, employee.fullName);
+    setCompleting(false);
 
-    pos.completeSale(activeSaleId, employee.fullName);
+    if (!result.success) {
+      toast({ variant: 'destructive', title: 'Could not complete sale', description: result.error });
+      return;
+    }
 
-    // Show invoice automatically after completion
     const completedSale = pos.sales.find((s) => s.id === activeSaleId);
     if (completedSale) {
       setInvoiceSale(completedSale);
@@ -181,6 +217,7 @@ export default function SalesPage() {
                   <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-[9px] font-mono text-muted-foreground">{item.deviceCode}</span>
                     <span className="text-[9px] text-muted-foreground">{item.category}</span>
+                    <Badge variant="outline" className="text-[8px] h-4 px-1.5">Qty: {item.quantityOnHand}</Badge>
                     {item.serialImei && <span className="text-[9px] font-mono text-muted-foreground">IMEI: {item.serialImei}</span>}
                   </div>
                 </button>
@@ -228,12 +265,17 @@ export default function SalesPage() {
                   <p className="text-center py-6 text-muted-foreground text-[12px]">Select products from inventory</p>
                 ) : (
                   <div className="space-y-2">
-                    {activeSaleItems.map((line) => (
+                    {activeSaleItems.map((line) => {
+                      const maxQty = line.inventoryItemId ? getAvailableQuantity(line.inventoryItemId) : undefined;
+                      return (
                       <div key={line.id} className="p-3 bg-secondary/40 rounded-lg">
                         <div className="flex items-start justify-between mb-2">
                           <div>
                             <p className="font-medium text-[12px]">{line.brand} {line.model}</p>
                             {line.serialImei && <p className="text-[9px] font-mono text-muted-foreground">IMEI: {line.serialImei}</p>}
+                            {maxQty !== undefined && (
+                              <p className="text-[9px] text-muted-foreground mt-0.5">Available: {maxQty}</p>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="font-mono text-[13px] font-bold tabular-nums">{formatCurrency(line.lineTotal)}</span>
@@ -245,8 +287,8 @@ export default function SalesPage() {
                         <div className="grid grid-cols-3 gap-2">
                           <div>
                             <Label className="text-[9px] text-muted-foreground">Qty</Label>
-                            <Input type="number" value={line.quantity} min={1}
-                              onChange={(e) => pos.updateSaleItem(activeSaleId, line.id, { quantity: Math.max(1, Number(e.target.value)) })}
+                            <Input type="number" value={line.quantity} min={1} max={maxQty}
+                              onChange={(e) => handleUpdateQuantity(line.id, line.inventoryItemId, Number(e.target.value))}
                               className="h-7 text-[11px] font-mono mt-0.5" />
                           </div>
                           <div>
@@ -264,7 +306,7 @@ export default function SalesPage() {
                           </div>
                         </div>
                       </div>
-                    ))}
+                    );})}
                   </div>
                 )}
               </CardContent>
@@ -323,7 +365,7 @@ export default function SalesPage() {
                   <span className={`font-mono font-bold tabular-nums ${remaining <= 0 ? 'text-emerald-600' : 'text-destructive'}`}>{formatCurrency(remaining)}</span>
                 </div>
 
-                <Button onClick={handleComplete} className="w-full h-11 text-[14px] font-semibold" disabled={!activeSaleItems.length || remaining > 0.01}>
+                <Button onClick={handleComplete} className="w-full h-11 text-[14px] font-semibold" disabled={!activeSaleItems.length || remaining > 0.01 || completing}>
                   <Receipt className="size-4 mr-2" />Complete Sale
                 </Button>
               </CardContent>
