@@ -208,7 +208,7 @@ export default function SettingsPage() {
               Refresh
             </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Record counts per store — data is fully isolated by store ID in the database. Each store only sees its own data.</p>
+          <p className="text-[11px] text-muted-foreground mt-1">Record counts for PayMore Vancouver (STR-001) in the database.</p>
         </CardHeader>
         <CardContent>
           {loadingCounts ? (

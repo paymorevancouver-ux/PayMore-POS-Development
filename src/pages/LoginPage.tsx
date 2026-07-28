@@ -2,9 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { usePosStore } from '@/stores/posStore';
-import { STORES } from '@/constants/mockData';
+import { STORE_ID } from '@/constants/mockData';
 import PinPad from '@/components/features/PinPad';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Shield } from 'lucide-react';
 import heroImg from '@/assets/login-hero.jpg';
 
@@ -12,7 +11,6 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuthStore();
   const { loadStoreData } = usePosStore();
-  const [storeId, setStoreId] = useState(STORES[0].id);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -20,10 +18,9 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      const emp = await login(pin, storeId);
+      const emp = await login(pin, STORE_ID);
       if (emp) {
-        // Load all store data from database
-        await loadStoreData(storeId);
+        await loadStoreData(STORE_ID);
         navigate('/pos/dashboard');
       } else {
         setError('Invalid PIN. Try again.');
@@ -74,22 +71,8 @@ export default function LoginPage() {
               Secured Terminal
             </div>
             <h2 className="text-xl font-bold text-foreground">Enter your PIN</h2>
-            <p className="text-muted-foreground text-sm mt-1">Select your store and type your employee PIN</p>
+            <p className="text-muted-foreground text-sm mt-1">PayMore Vancouver — enter your employee PIN</p>
             <p className="text-[10px] text-muted-foreground/50 mt-2">Paymore — Production Terminal (Database-backed)</p>
-          </div>
-
-          <div className="mb-6">
-            <label className="block text-[13px] font-medium text-foreground mb-1.5">Store Location</label>
-            <Select value={storeId} onValueChange={setStoreId}>
-              <SelectTrigger className="h-11">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STORES.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="flex justify-center">

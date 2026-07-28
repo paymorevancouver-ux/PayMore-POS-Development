@@ -1,7 +1,7 @@
 /**
- * Production Migration Data for Paymore Surrey
- * Imported from real customer, device, and settings sheets.
- * Deduplicated by ID number (keeping most complete record).
+ * Legacy migration data (Surrey seed — disabled).
+ * Single-store PayMore Vancouver: customer, inventory, and employee data
+ * is imported via CSV, not auto-seeded by the application.
  */
 
 import type { Customer, InventoryItem, Employee } from '@/types';
@@ -369,8 +369,12 @@ const RAW_CUSTOMERS: string[][] = [
 ["Driver's License","7142675","Christopher","A","Marfori","1982-09-22","","25-15868 85th Ave","Surrey","BC","V4N 0Y9","778-926-3415","chrismarfori@gmail.com","100","183","Male"],
 ];
 
-// ── BUILD DEDUPLICATED CUSTOMERS ──
+// ── BUILD DEDUPLICATED CUSTOMERS (disabled — CSV import only) ──
 export function buildCustomers(): Customer[] {
+  return [];
+}
+
+function _legacyBuildCustomersDisabled(): Customer[] {
   const seen = new Map<string, Customer>();
   const now = new Date().toISOString();
   let codeNum = 10001;
@@ -575,6 +579,10 @@ const RAW_DEVICES: string[][] = [
 ];
 
 export function buildInventory(): InventoryItem[] {
+  return [];
+}
+
+function _legacyBuildInventoryDisabled(): InventoryItem[] {
   const now = new Date().toISOString();
   return RAW_DEVICES.map((r) => {
     const serial = c(r[5]);
@@ -611,19 +619,14 @@ export function buildInventory(): InventoryItem[] {
   });
 }
 
-// ── PRODUCTION EMPLOYEES ──
-export const PROD_EMPLOYEES: Employee[] = [
-  { id: 'E001', fullName: 'Nirmal Singh', email: 'nirmal@paymoresurrey.ca', pin: '5486', role: 'admin', isActive: true, createdAt: '2025-01-01T08:00:00Z' },
-  { id: 'E002', fullName: 'Simran Singh', email: 'simran@paymoresurrey.ca', pin: '4695', role: 'manager', isActive: true, createdAt: '2025-01-01T08:00:00Z' },
-  { id: 'E003', fullName: 'Suneet Vats', email: 'suneet@paymoresurrey.ca', pin: '8143', role: 'manager', isActive: true, createdAt: '2025-01-01T08:00:00Z' },
-  { id: 'E004', fullName: 'Abhishek Pundir', email: 'abhishek@paymoresurrey.ca', pin: '4668', role: 'manager', isActive: true, createdAt: '2025-01-01T08:00:00Z' },
-];
+// ── PRODUCTION EMPLOYEES (disabled — loaded from database / CSV import) ──
+export const PROD_EMPLOYEES: Employee[] = [];
 
-// ── PRODUCTION SETTINGS ──
+// ── DEFAULT SETTINGS (fallback counters only — not auto-seeded) ──
 export const PROD_SETTINGS = {
-  nextVisitNumber: 5444,
-  nextDeviceNumber: 373,
-  nextSaleNumber: 351,
-  openingBalance: 5000,
-  currentBalance: 1645,
+  nextVisitNumber: 1,
+  nextDeviceNumber: 1,
+  nextSaleNumber: 1,
+  openingBalance: 0,
+  currentBalance: 0,
 };

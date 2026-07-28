@@ -26,13 +26,11 @@ export function generateCode(prefix: string): string {
   return `${prefix}-${dateStr}-${seq}`;
 }
 
-// ── Device Code Generation (store-aware, 6-digit padded) ──
-// Each store has its own independent numbering sequence and prefix.
-// Examples: BC01-000001 (Surrey) | BC05-000001 (Vancouver)
+// ── Device Code Generation (single-store, 6-digit padded) ──
+// PayMore Vancouver (STR-001): BC05-000001
 
 const STORE_DEVICE_PREFIX_MAP: Record<string, string> = {
-  'STR-001': 'BC01', // Paymore Surrey
-  'STR-002': 'BC05', // Paymore Vancouver
+  'STR-001': 'BC05', // PayMore Vancouver
 };
 
 export function getStoreDeviceCodePrefix(storeId: string): string {

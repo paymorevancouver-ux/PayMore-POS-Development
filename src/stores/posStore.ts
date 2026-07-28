@@ -15,7 +15,8 @@ import type {
 import { calculateLineTax, generateId, generateCode, generateDeviceCode, setNextDeviceNumber, getStoreDeviceCodePrefix, parseDeviceCodeNumber, generateCustomerCode, round2 } from '@/lib/taxCalc';
 import { db } from '@/lib/database';
 import { useEbayStore } from '@/stores/ebayStore';
-import { buildCustomers, buildInventory, PROD_SETTINGS } from '@/constants/migrationData';
+import { PROD_SETTINGS } from '@/constants/migrationData';
+import { STORE_ID } from '@/constants/mockData';
 
 interface PosState {
   // Loading
@@ -165,43 +166,15 @@ export const usePosStore = create<PosState>()(
       console.log(`[POS] Loading data for store ${storeId}...`);
 
       try {
-        // Check if data exists (seeded)
-        const settings = await db.getAllSettings(storeId);
-        const isSeeded = settings['data_seeded'] === 'true';
-
-        if (!isSeeded) {
-          console.log('[POS] First load — seeding production data...');
-          // Seed stores
-          await db.getOrCreateStore('STR-001', 'Paymore Surrey', '15955 Fraser Highway #103, Surrey, BC V4N 0Y3', '(778) 783-3600', 'GST-827461953', 'PST-103847261');
-          await db.getOrCreateStore('STR-002', 'Paymore Vancouver', '1870 Commercial Dr, Vancouver, BC V5N 4A5', '(604) 555-0202', 'GST-827461954', 'PST-103847262');
-
-          // Seed employees for this store
-          const { PROD_EMPLOYEES } = await import('@/constants/migrationData');
-          for (const emp of PROD_EMPLOYEES) {
-            await db.upsertEmployee(storeId, emp);
-          }
-
-          // Seed customers & inventory
-          const customers = buildCustomers();
-          const inventory = buildInventory();
-          const custCount = await db.seedCustomers(storeId, customers);
-          const invCount = await db.seedInventory(storeId, inventory);
-          console.log(`[POS] Seeded ${custCount} customers, ${invCount} inventory items`);
-
-          // Seed settings
-          await db.setSetting(storeId, 'next_visit_number', String(PROD_SETTINGS.nextVisitNumber));
-          await db.setSetting(storeId, 'next_device_number', String(PROD_SETTINGS.nextDeviceNumber));
-          await db.setSetting(storeId, 'next_sale_number', String(PROD_SETTINGS.nextSaleNumber));
-
-          // Seed initial drawer (always open)
-          await db.upsertCashDrawer(storeId, {
-            isOpen: true, openedAt: new Date().toISOString(), openedBy: 'SYSTEM',
-            openingBalance: PROD_SETTINGS.openingBalance,
-            currentBalance: PROD_SETTINGS.currentBalance,
-          });
-
-          await db.setSetting(storeId, 'data_seeded', 'true');
-        }
+        // Ensure single-store record exists (PayMore Vancouver — data imported via CSV)
+        await db.getOrCreateStore(
+          STORE_ID,
+          'PayMore Vancouver',
+          '4534 Main St, Vancouver, BC',
+          '(604) 555-0202',
+          'GST-827461954',
+          'PST-103847262',
+        );
 
         // Load all data in parallel
         const [
@@ -237,7 +210,7 @@ export const usePosStore = create<PosState>()(
         const nextVisitNum = parseInt(allSettings['next_visit_number'] || String(PROD_SETTINGS.nextVisitNumber));
 
         // ── ONE-TIME MIGRATION: Convert legacy DEV-XXXXX codes to store-specific format ──
-        // STR-001 → BC01-XXXXXX, STR-002 → BC05-XXXXXX (6-digit padded)
+        // STR-001 (Vancouver): BC05-XXXXXX (6-digit padded)
         const legacyItems = inventory.filter((i) => i.deviceCode.startsWith('DEV-'));
         if (legacyItems.length > 0) {
           const prefix = getStoreDeviceCodePrefix(storeId);
@@ -308,7 +281,7 @@ export const usePosStore = create<PosState>()(
       const id = generateId('VIS');
       const now = new Date().toISOString();
       const num = get().nextVisitNumber;
-      const prefix = storeId === 'STR-001' ? 'BC-01' : 'BC-02';
+      const prefix = 'BC-02';
       const visitCode = `${prefix}-${num}`;
       const visit: CustomerVisit = { id, visitCode, customerId, employeeId, visitType, notes, createdAt: now, updatedAt: now };
       set((s) => ({ visits: [visit, ...s.visits], nextVisitNumber: s.nextVisitNumber + 1 }));
@@ -792,7 +765,7 @@ export const usePosStore = create<PosState>()(
 
     // ── Labels ──
     printLabel: (visitId, employeeId) => {
-      const storeId = get().activeStoreId || 'STR-001';
+      const storeId = get().activeStoreId || STORE_ID;
       const existing = get().labels.find((l) => l.visitId === visitId);
       if (existing) {
         const updated = { ...existing, printCount: existing.printCount + 1, printedAt: new Date().toISOString() };
