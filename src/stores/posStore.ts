@@ -19,6 +19,25 @@ import { PROD_SETTINGS } from '@/constants/migrationData';
 import { STORE_ID } from '@/constants/mockData';
 import { applyInventoryReturn, applyInventorySaleDeduction, validateSaleQuantity } from '@/lib/inventorySale';
 
+const ACTING_EMPLOYEE_KEY = 'pm-acting-employee-id';
+
+function readActingEmployeeId(): string | null {
+  try {
+    return sessionStorage.getItem(ACTING_EMPLOYEE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeActingEmployeeId(id: string | null) {
+  try {
+    if (id) sessionStorage.setItem(ACTING_EMPLOYEE_KEY, id);
+    else sessionStorage.removeItem(ACTING_EMPLOYEE_KEY);
+  } catch {
+    /* ignore quota / private-mode errors */
+  }
+}
+
 interface PosState {
   // Loading
   isLoading: boolean;
@@ -165,9 +184,12 @@ export const usePosStore = create<PosState>()(
     auditLog: [],
     labels: [],
     nextVisitNumber: PROD_SETTINGS.nextVisitNumber,
-    actingEmployeeId: null,
+    actingEmployeeId: readActingEmployeeId(),
 
-    setActingEmployeeId: (id) => set({ actingEmployeeId: id }),
+    setActingEmployeeId: (id) => {
+      writeActingEmployeeId(id);
+      set({ actingEmployeeId: id });
+    },
 
     // ── Load all store data from DB ──
     loadStoreData: async (storeId: string) => {
@@ -863,6 +885,7 @@ export const usePosStore = create<PosState>()(
         loadError: null,
         actingEmployeeId: null,
       });
+      writeActingEmployeeId(null);
     },
   })
 );

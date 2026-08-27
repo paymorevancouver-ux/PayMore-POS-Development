@@ -103,8 +103,12 @@ export default function CustomerVisitPage() {
     ? getEmployeeById(pos.actingEmployeeId)
     : undefined) || employee;
 
-  // Wizard state
-  const [step, setStep] = useState<Step>('search');
+  // Wizard state — Dashboard Buy / Trade skips customer search and opens the new-customer form.
+  const [step, setStep] = useState<Step>(() => (
+    searchParams.get('from') === 'buy-trade' && !searchParams.get('customerId')
+      ? 'customer-form'
+      : 'search'
+  ));
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -286,21 +290,26 @@ export default function CustomerVisitPage() {
     if (!customerId) return;
     const token = searchParams.get('t') || customerId;
     const guardKey = `pm-preselect-visit:${token}`;
+    const keepBuyTradeOrigin = () => {
+      const next = new URLSearchParams();
+      if (searchParams.get('from') === 'buy-trade') next.set('from', 'buy-trade');
+      setSearchParams(next, { replace: true });
+    };
     if (sessionStorage.getItem(guardKey) === '1' || preselectHandled.current) {
-      if (searchParams.get('customerId')) setSearchParams({}, { replace: true });
+      if (searchParams.get('customerId')) keepBuyTradeOrigin();
       return;
     }
     const c = pos.customers.find((x) => x.id === customerId);
     if (!c) {
       if (pos.customers.length > 0) {
         preselectHandled.current = true;
-        setSearchParams({}, { replace: true });
+        keepBuyTradeOrigin();
       }
       return;
     }
     preselectHandled.current = true;
     sessionStorage.setItem(guardKey, '1');
-    setSearchParams({}, { replace: true });
+    keepBuyTradeOrigin();
     selectCustomer(c);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, pos.customers, setSearchParams]);
@@ -398,13 +407,25 @@ export default function CustomerVisitPage() {
   };
 
   const handleNewVisit = () => {
-    setStep('search');
     setSelectedCustomer(null);
     setVisitId(null);
     setPurchaseId(null);
     setSearchQuery('');
     setCustForm(emptyCust);
     setIsEditing(false);
+    setStep(fromBuyTrade ? 'customer-form' : 'search');
+  };
+
+  const goBackFromCustomerForm = () => {
+    if (selectedCustomer && visitId) {
+      setStep('devices');
+      return;
+    }
+    if (fromBuyTrade) {
+      navigate('/pos/dashboard');
+      return;
+    }
+    setStep('search');
   };
 
   // ── Stepper ──
@@ -593,7 +614,7 @@ export default function CustomerVisitPage() {
                     </p>
                   </div>
                   <Button variant="ghost" size="sm" className="h-8 text-[12px] shrink-0"
-                    onClick={() => setStep(selectedCustomer && visitId ? 'devices' : 'search')}>
+                    onClick={goBackFromCustomerForm}>
                     Back
                   </Button>
                 </div>
@@ -748,6 +769,10 @@ export default function CustomerVisitPage() {
                         <p className="text-[13px] font-semibold text-primary">Take Picture of ID</p>
                         <p className="text-[10px] text-muted-foreground mt-0.5">Scan the QR code with a phone to capture the ID</p>
                       </button>
+                      <Button type="button" variant="ghost" size="sm" className="mt-1.5 h-7 w-full text-[10px]"
+                        onClick={() => setShowScanner(true)}>
+                        <ScanLine className="size-3 mr-1" />Scan ID (Direct)
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -770,7 +795,7 @@ export default function CustomerVisitPage() {
 
                 <div className="flex flex-col-reverse sm:flex-row gap-2 mt-5">
                   <Button variant="outline" className="h-11 text-[13px] sm:w-auto w-full"
-                    onClick={() => setStep(selectedCustomer && visitId ? 'devices' : 'search')}>
+                    onClick={goBackFromCustomerForm}>
                     Back
                   </Button>
                   <Button onClick={handleSaveCustomer} className="flex-1 h-11 text-[14px] font-semibold"
@@ -1133,7 +1158,7 @@ export default function CustomerVisitPage() {
       <IdScanner
         open={showScanner}
         onOpenChange={setShowScanner}
-        onScan={handleScanResult}
+        onScan={step === 'customer-form' ? handleFormScanResult : handleScanResult}
       />
 
       {/* ════════════ QR ID SCANNER (WIRELESS) ════════════ */}
