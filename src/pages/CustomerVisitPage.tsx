@@ -14,7 +14,7 @@ import { useToast } from '@/hooks/use-toast';
 import {
   Search, Plus, UserCheck, Edit2, ChevronRight, Printer, Trash2,
   Check, X, DollarSign, ScanLine, Package, ArrowRight, ShoppingBag, AlertCircle, ImageIcon,
-  QrCode, Camera, CreditCard,
+  QrCode, Camera,
 } from 'lucide-react';
 import { formatCurrency, round2 } from '@/lib/taxCalc';
 import { DEVICE_CONDITIONS, CATEGORIES, PAYMENT_METHODS, ID_TYPES, PROVINCES } from '@/constants/config';
@@ -438,10 +438,10 @@ export default function CustomerVisitPage() {
   const activeIdx = steps.findIndex((s) => s.key === step || (step === 'customer-form' && s.key === 'search'));
 
   return (
-    <div className="space-y-4 h-[calc(100vh-112px)] flex flex-col">
+    <div className={`${step === 'customer-form' ? 'space-y-2' : 'space-y-4'} h-[calc(100vh-112px)] flex flex-col`}>
       {/* Stepper bar */}
       <Card>
-        <CardContent className="py-3 px-5">
+        <CardContent className={step === 'customer-form' ? 'py-2 px-5' : 'py-3 px-5'}>
           <div className="flex items-center gap-2">
             {steps.map((s, idx) => {
               const Icon = s.icon;
@@ -601,30 +601,29 @@ export default function CustomerVisitPage() {
 
         {/* ════════════ STEP: CUSTOMER FORM ════════════ */}
         {step === 'customer-form' && (
-          <div className="max-w-5xl mx-auto h-full overflow-y-auto pb-2">
-            <Card>
-              <CardHeader className="pb-4 pt-5 px-6">
+          <div className="w-full max-w-[1600px] mx-auto h-full overflow-y-auto">
+            <Card className="h-full flex flex-col">
+              <CardHeader className="py-3 px-5 shrink-0">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <CardTitle className="text-[18px] font-bold">
+                    <CardTitle className="text-[16px] font-bold leading-tight">
                       {selectedCustomer && isEditing ? 'Edit Customer Information' : 'New Customer — Selling Devices'}
                     </CardTitle>
-                    <p className="text-[12px] text-muted-foreground mt-1">
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
                       Enter customer details or scan an ID. Review everything before creating the record.
                     </p>
                   </div>
-                  <Button variant="ghost" size="sm" className="h-8 text-[12px] shrink-0"
+                  <Button variant="ghost" size="sm" className="h-7 text-[12px] shrink-0"
                     onClick={goBackFromCustomerForm}>
                     Back
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="px-6 pb-6">
-                {/* ID Match Banner */}
+              <CardContent className="px-5 pb-4 pt-0 flex-1 min-h-0 flex flex-col">
                 {idMatch && !isEditing && (
-                  <div className="mb-4">
-                    <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-50 border-2 border-amber-300">
-                      <AlertCircle className="size-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="mb-2.5">
+                    <div className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-amber-50 border border-amber-300">
+                      <AlertCircle className="size-4 text-amber-600 shrink-0 mt-0.5" />
                       <div className="flex-1 min-w-0">
                         <p className="text-[13px] font-semibold text-amber-800">Existing customer found with this ID number</p>
                         <div className="flex items-center gap-2 mt-1.5 text-[12px] text-amber-700">
@@ -646,146 +645,144 @@ export default function CustomerVisitPage() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-                  <div className="space-y-3 min-w-0">
-                    <div>
-                      <Label className="text-[11px] font-medium">ID Type *</Label>
-                      <Select value={custForm.idType} onValueChange={(v) => setCustForm({ ...custForm, idType: v as IdType })}>
-                        <SelectTrigger className="mt-1 h-10 text-[12px]"><SelectValue /></SelectTrigger>
-                        <SelectContent>{ID_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">First Name *</Label>
-                      <Input value={custForm.firstName} onChange={(e) => setCustForm({ ...custForm, firstName: e.target.value })}
-                        className={`mt-1 h-10 text-[12px] ${formErrors.firstName ? 'border-destructive focus-visible:ring-destructive' : ''}`} />
-                      {formErrors.firstName && <p className="text-[10px] text-destructive mt-1 font-medium">{formErrors.firstName}</p>}
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Middle Name</Label>
-                      <Input value={custForm.middleName} onChange={(e) => setCustForm({ ...custForm, middleName: e.target.value })} className="mt-1 h-10 text-[12px]" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Last Name *</Label>
-                      <Input value={custForm.lastName} onChange={(e) => setCustForm({ ...custForm, lastName: e.target.value })}
-                        className={`mt-1 h-10 text-[12px] ${formErrors.lastName ? 'border-destructive focus-visible:ring-destructive' : ''}`} />
-                      {formErrors.lastName && <p className="text-[10px] text-destructive mt-1 font-medium">{formErrors.lastName}</p>}
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Date of Birth *</Label>
-                      <Input type="date" value={custForm.dob} onChange={(e) => setCustForm({ ...custForm, dob: e.target.value })}
-                        className={`mt-1 h-10 text-[12px] ${formErrors.dob ? 'border-destructive focus-visible:ring-destructive' : ''}`} />
-                      {formErrors.dob ? (
-                        <p className="text-[10px] text-destructive mt-1 font-medium">{formErrors.dob}</p>
-                      ) : customerAge !== null && customerAge >= 18 ? (
-                        <p className="text-[10px] text-emerald-600 mt-1">Age: {customerAge}</p>
-                      ) : null}
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Address Line 1</Label>
-                      <Input value={custForm.address1} onChange={(e) => setCustForm({ ...custForm, address1: e.target.value })} className="mt-1 h-10 text-[12px]" placeholder="Street address" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Address Line 2</Label>
-                      <Input value={custForm.address2} onChange={(e) => setCustForm({ ...custForm, address2: e.target.value })} className="mt-1 h-10 text-[12px]" placeholder="Unit, Suite, Apt #…" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Sex</Label>
-                      <Select value={custForm.sex} onValueChange={(v) => setCustForm({ ...custForm, sex: v })}>
-                        <SelectTrigger className="mt-1 h-10 text-[12px]"><SelectValue placeholder="Select" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Male">Male</SelectItem>
-                          <SelectItem value="Female">Female</SelectItem>
-                          <SelectItem value="Other">Other</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Weight</Label>
-                      <Input value={custForm.weight} onChange={(e) => setCustForm({ ...custForm, weight: e.target.value })} className="mt-1 h-10 text-[12px]" placeholder="e.g. 75" />
-                    </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-5 gap-y-2.5 min-w-0">
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">ID Type *</Label>
+                    <Select value={custForm.idType} onValueChange={(v) => setCustForm({ ...custForm, idType: v as IdType })}>
+                      <SelectTrigger className="mt-1 h-[38px] text-[12px]"><SelectValue /></SelectTrigger>
+                      <SelectContent>{ID_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                    </Select>
                   </div>
-
-                  <div className="space-y-3 min-w-0">
-                    <div>
-                      <Label className="text-[11px] font-medium">ID Number *</Label>
-                      <Input value={custForm.idNumber} onChange={(e) => setCustForm({ ...custForm, idNumber: e.target.value })}
-                        className={`mt-1 h-10 text-[12px] ${
-                          formErrors.idNumber ? 'border-destructive focus-visible:ring-destructive' :
-                          idMatch && !isEditing ? 'border-amber-400 ring-1 ring-amber-300' : ''
-                        }`}
-                        placeholder="e.g. BC-1234-5678" />
-                      {formErrors.idNumber && <p className="text-[10px] text-destructive mt-1 font-medium">{formErrors.idNumber}</p>}
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Email *</Label>
-                      <Input type="email" value={custForm.email} onChange={(e) => setCustForm({ ...custForm, email: e.target.value })}
-                        className={`mt-1 h-10 text-[12px] ${formErrors.email ? 'border-destructive focus-visible:ring-destructive' : ''}`}
-                        placeholder="customer@example.com" />
-                      {formErrors.email && <p className="text-[10px] text-destructive mt-1 font-medium">{formErrors.email}</p>}
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Phone *</Label>
-                      <Input value={custForm.phone} onChange={(e) => setCustForm({ ...custForm, phone: e.target.value })}
-                        className={`mt-1 h-10 text-[12px] ${formErrors.phone ? 'border-destructive focus-visible:ring-destructive' : ''}`}
-                        placeholder="(604) 555-0000" />
-                      {formErrors.phone && <p className="text-[10px] text-destructive mt-1 font-medium">{formErrors.phone}</p>}
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">City</Label>
-                      <Input value={custForm.city} onChange={(e) => setCustForm({ ...custForm, city: e.target.value })} className="mt-1 h-10 text-[12px]" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Province</Label>
-                      <Select value={custForm.province} onValueChange={(v) => setCustForm({ ...custForm, province: v })}>
-                        <SelectTrigger className="mt-1 h-10 text-[12px]"><SelectValue /></SelectTrigger>
-                        <SelectContent>{PROVINCES.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Postal Code</Label>
-                      <Input value={custForm.postalCode} onChange={(e) => setCustForm({ ...custForm, postalCode: e.target.value })} className="mt-1 h-10 text-[12px]" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Race</Label>
-                      <Input value={custForm.race} onChange={(e) => setCustForm({ ...custForm, race: e.target.value })} className="mt-1 h-10 text-[12px]" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Height</Label>
-                      <Input value={custForm.height} onChange={(e) => setCustForm({ ...custForm, height: e.target.value })} className="mt-1 h-10 text-[12px]" placeholder="e.g. 72" />
-                    </div>
-                    <div>
-                      <Label className="text-[11px] font-medium">Take Picture of ID</Label>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">ID Number *</Label>
+                    <Input value={custForm.idNumber} onChange={(e) => setCustForm({ ...custForm, idNumber: e.target.value })}
+                      className={`mt-1 h-[38px] text-[12px] ${
+                        formErrors.idNumber ? 'border-destructive focus-visible:ring-destructive' :
+                        idMatch && !isEditing ? 'border-amber-400 ring-1 ring-amber-300' : ''
+                      }`}
+                      placeholder="e.g. BC-1234-5678" />
+                    {formErrors.idNumber && <p className="text-[10px] text-destructive mt-0.5 leading-tight font-medium">{formErrors.idNumber}</p>}
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Take Picture of ID</Label>
+                    <div className="mt-1 flex gap-1">
                       <button
                         type="button"
                         onClick={() => setShowQrScanner(true)}
-                        className="mt-1 w-full rounded-lg border-2 border-dashed border-primary/35 bg-primary/5 hover:bg-primary/10 hover:border-primary/50 transition-colors px-4 py-5 text-center cursor-pointer"
+                        className="flex-1 h-[38px] rounded-md border-2 border-dashed border-primary/35 bg-primary/5 hover:bg-primary/10 hover:border-primary/50 transition-colors px-2 text-center cursor-pointer flex items-center justify-center gap-1.5 text-primary min-w-0"
                       >
-                        <div className="flex items-center justify-center gap-2 text-primary mb-1.5">
-                          <QrCode className="size-5" />
-                          <Camera className="size-5" />
-                          <CreditCard className="size-5" />
-                        </div>
-                        <p className="text-[13px] font-semibold text-primary">Take Picture of ID</p>
-                        <p className="text-[10px] text-muted-foreground mt-0.5">Scan the QR code with a phone to capture the ID</p>
+                        <QrCode className="size-4 shrink-0" />
+                        <Camera className="size-4 shrink-0" />
+                        <span className="text-[12px] font-semibold truncate">Take Picture of ID</span>
                       </button>
-                      <Button type="button" variant="ghost" size="sm" className="mt-1.5 h-7 w-full text-[10px]"
+                      <Button type="button" variant="outline" size="sm" className="h-[38px] px-2.5 shrink-0 text-[10px]"
                         onClick={() => setShowScanner(true)}>
-                        <ScanLine className="size-3 mr-1" />Scan ID (Direct)
+                        <ScanLine className="size-3.5 mr-1" />Direct
                       </Button>
                     </div>
                   </div>
-                </div>
 
-                <div className="mt-4">
-                  <Label className="text-[11px] font-medium">Staff Notes</Label>
-                  <Textarea value={custForm.notes} onChange={(e) => setCustForm({ ...custForm, notes: e.target.value })} className="mt-1 text-[12px] min-h-[72px]" placeholder="Any notes about this customer…" />
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">First Name *</Label>
+                    <Input value={custForm.firstName} onChange={(e) => setCustForm({ ...custForm, firstName: e.target.value })}
+                      className={`mt-1 h-[38px] text-[12px] ${formErrors.firstName ? 'border-destructive focus-visible:ring-destructive' : ''}`} />
+                    {formErrors.firstName && <p className="text-[10px] text-destructive mt-0.5 leading-tight font-medium">{formErrors.firstName}</p>}
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Middle Name</Label>
+                    <Input value={custForm.middleName} onChange={(e) => setCustForm({ ...custForm, middleName: e.target.value })} className="mt-1 h-[38px] text-[12px]" />
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Email *</Label>
+                    <Input type="email" value={custForm.email} onChange={(e) => setCustForm({ ...custForm, email: e.target.value })}
+                      className={`mt-1 h-[38px] text-[12px] ${formErrors.email ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                      placeholder="customer@example.com" />
+                    {formErrors.email && <p className="text-[10px] text-destructive mt-0.5 leading-tight font-medium">{formErrors.email}</p>}
+                  </div>
+
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Last Name *</Label>
+                    <Input value={custForm.lastName} onChange={(e) => setCustForm({ ...custForm, lastName: e.target.value })}
+                      className={`mt-1 h-[38px] text-[12px] ${formErrors.lastName ? 'border-destructive focus-visible:ring-destructive' : ''}`} />
+                    {formErrors.lastName && <p className="text-[10px] text-destructive mt-0.5 leading-tight font-medium">{formErrors.lastName}</p>}
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Date of Birth *</Label>
+                    <Input type="date" value={custForm.dob} onChange={(e) => setCustForm({ ...custForm, dob: e.target.value })}
+                      className={`mt-1 h-[38px] text-[12px] ${formErrors.dob ? 'border-destructive focus-visible:ring-destructive' : ''}`} />
+                    {formErrors.dob ? (
+                      <p className="text-[10px] text-destructive mt-0.5 leading-tight font-medium">{formErrors.dob}</p>
+                    ) : customerAge !== null && customerAge >= 18 ? (
+                      <p className="text-[10px] text-emerald-600 mt-0.5 leading-tight">Age: {customerAge}</p>
+                    ) : null}
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Phone *</Label>
+                    <Input value={custForm.phone} onChange={(e) => setCustForm({ ...custForm, phone: e.target.value })}
+                      className={`mt-1 h-[38px] text-[12px] ${formErrors.phone ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                      placeholder="(604) 555-0000" />
+                    {formErrors.phone && <p className="text-[10px] text-destructive mt-0.5 leading-tight font-medium">{formErrors.phone}</p>}
+                  </div>
+
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Address Line 1</Label>
+                    <Input value={custForm.address1} onChange={(e) => setCustForm({ ...custForm, address1: e.target.value })} className="mt-1 h-[38px] text-[12px]" placeholder="Street address" />
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Address Line 2</Label>
+                    <Input value={custForm.address2} onChange={(e) => setCustForm({ ...custForm, address2: e.target.value })} className="mt-1 h-[38px] text-[12px]" placeholder="Unit, Suite, Apt #…" />
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">City</Label>
+                    <Input value={custForm.city} onChange={(e) => setCustForm({ ...custForm, city: e.target.value })} className="mt-1 h-[38px] text-[12px]" />
+                  </div>
+
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Sex</Label>
+                    <Select value={custForm.sex} onValueChange={(v) => setCustForm({ ...custForm, sex: v })}>
+                      <SelectTrigger className="mt-1 h-[38px] text-[12px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Male">Male</SelectItem>
+                        <SelectItem value="Female">Female</SelectItem>
+                        <SelectItem value="Other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Weight</Label>
+                    <Input value={custForm.weight} onChange={(e) => setCustForm({ ...custForm, weight: e.target.value })} className="mt-1 h-[38px] text-[12px]" placeholder="e.g. 75" />
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Province</Label>
+                    <Select value={custForm.province} onValueChange={(v) => setCustForm({ ...custForm, province: v })}>
+                      <SelectTrigger className="mt-1 h-[38px] text-[12px]"><SelectValue /></SelectTrigger>
+                      <SelectContent>{PROVINCES.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Race</Label>
+                    <Input value={custForm.race} onChange={(e) => setCustForm({ ...custForm, race: e.target.value })} className="mt-1 h-[38px] text-[12px]" />
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Height</Label>
+                    <Input value={custForm.height} onChange={(e) => setCustForm({ ...custForm, height: e.target.value })} className="mt-1 h-[38px] text-[12px]" placeholder="e.g. 72" />
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-[11px] font-medium leading-none">Postal Code</Label>
+                    <Input value={custForm.postalCode} onChange={(e) => setCustForm({ ...custForm, postalCode: e.target.value })} className="mt-1 h-[38px] text-[12px]" />
+                  </div>
+
+                  <div className="min-w-0 md:col-span-2 xl:col-span-3">
+                    <Label className="text-[11px] font-medium leading-none">Staff Notes</Label>
+                    <Textarea value={custForm.notes} onChange={(e) => setCustForm({ ...custForm, notes: e.target.value })} className="mt-1 text-[12px] min-h-[64px] h-16 resize-none" placeholder="Any notes about this customer…" />
+                  </div>
                 </div>
 
                 {!isFormValid && (
-                  <div className="mt-5 px-4 py-3 rounded-lg bg-destructive/5 border border-destructive/25">
-                    <p className="text-[12px] font-semibold text-destructive mb-1.5">Please complete the required fields before continuing:</p>
-                    <ul className="space-y-0.5 text-[11px] text-destructive/90">
+                  <div className="mt-2.5 px-3 py-1.5 rounded-md bg-destructive/5 border border-destructive/25">
+                    <p className="text-[11px] font-semibold text-destructive mb-0.5">Please complete the required fields before continuing:</p>
+                    <ul className="flex flex-wrap gap-x-3 gap-y-0 text-[10px] text-destructive/90">
                       {Object.entries(formErrors).map(([key, msg]) => (
                         <li key={key}>• {msg}</li>
                       ))}
@@ -793,12 +790,12 @@ export default function CustomerVisitPage() {
                   </div>
                 )}
 
-                <div className="flex flex-col-reverse sm:flex-row gap-2 mt-5">
-                  <Button variant="outline" className="h-11 text-[13px] sm:w-auto w-full"
+                <div className="flex flex-col-reverse sm:flex-row gap-2 mt-3 shrink-0">
+                  <Button variant="outline" className="h-9 text-[13px] sm:w-auto w-full"
                     onClick={goBackFromCustomerForm}>
                     Back
                   </Button>
-                  <Button onClick={handleSaveCustomer} className="flex-1 h-11 text-[14px] font-semibold"
+                  <Button onClick={handleSaveCustomer} className="flex-1 h-9 text-[13px] font-semibold"
                     disabled={(!!idMatch && !isEditing) || !isFormValid}>
                     {selectedCustomer && isEditing ? 'Save & Continue' : 'Create New Customer'}
                     <ChevronRight className="size-4 ml-1.5" />
