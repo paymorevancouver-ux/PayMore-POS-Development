@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { usePosStore } from '@/stores/posStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
@@ -93,6 +94,8 @@ export default function CustomerVisitPage() {
   const { employee, store } = useAuthStore();
   const pos = usePosStore();
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const preselectHandled = useRef(false);
 
   // Wizard state
   const [step, setStep] = useState<Step>('search');
@@ -277,6 +280,30 @@ export default function CustomerVisitPage() {
     setStep('devices');
     toast({ title: 'Visit started', description: `Now add the devices ${customer.firstName} wants to sell` });
   };
+
+  useEffect(() => {
+    const customerId = searchParams.get('customerId');
+    if (!customerId) return;
+    const token = searchParams.get('t') || customerId;
+    const guardKey = `pm-preselect-visit:${token}`;
+    if (sessionStorage.getItem(guardKey) === '1' || preselectHandled.current) {
+      if (searchParams.get('customerId')) setSearchParams({}, { replace: true });
+      return;
+    }
+    const c = pos.customers.find((x) => x.id === customerId);
+    if (!c) {
+      if (pos.customers.length > 0) {
+        preselectHandled.current = true;
+        setSearchParams({}, { replace: true });
+      }
+      return;
+    }
+    preselectHandled.current = true;
+    sessionStorage.setItem(guardKey, '1');
+    setSearchParams({}, { replace: true });
+    selectCustomer(c);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, pos.customers, setSearchParams]);
 
   const handleSaveCustomer = () => {
     if (!isFormValid) {

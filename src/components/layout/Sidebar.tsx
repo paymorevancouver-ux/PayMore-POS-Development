@@ -2,8 +2,8 @@ import { useAuthStore } from '@/stores/authStore';
 import { usePosStore } from '@/stores/posStore';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, Landmark, Package, ShoppingCart, RotateCcw,
-  ArrowRightLeft, FileEdit, BarChart3, Settings, ScrollText, LogOut, Globe,
+  LayoutDashboard, Users, ContactRound, Landmark, Package, ShoppingCart, RotateCcw,
+  ArrowRightLeft, FileEdit, BarChart3, Settings, ScrollText, LogOut,
   UserCog, Tag,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/taxCalc';
@@ -14,6 +14,7 @@ const NAV_SECTIONS = [
     items: [
       { path: '/pos/dashboard', label: 'Dashboard', icon: LayoutDashboard, module: 'dashboard' },
       { path: '/pos/customer', label: 'Buy / Sell Visit', icon: Users, module: 'customer' },
+      { path: '/pos/customers', label: 'Customers', icon: ContactRound, module: 'customer' },
       { path: '/pos/drawer', label: 'Cash Drawer', icon: Landmark, module: 'drawer' },
     ],
   },
@@ -93,7 +94,9 @@ export default function Sidebar() {
             <p className="text-[9px] font-semibold text-sidebar-foreground/50 uppercase tracking-widest px-3 mb-1">{section.label}</p>
             <div className="space-y-0.5">
               {visibleItems.map((item) => {
-                const active = location.pathname === item.path;
+                const active = item.path === '/pos/customers'
+                  ? location.pathname === '/pos/customers' || location.pathname.startsWith('/pos/customers/')
+                  : location.pathname === item.path;
                 const Icon = item.icon;
                 return (
                   <button

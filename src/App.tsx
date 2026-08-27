@@ -10,6 +10,8 @@ import LoginPage from '@/pages/LoginPage';
 import IdUploadPage from '@/pages/IdUploadPage';
 import DashboardPage from '@/pages/DashboardPage';
 import CustomerVisitPage from '@/pages/CustomerVisitPage';
+import CustomersPage from '@/pages/CustomersPage';
+import CustomerProfilePage from '@/pages/CustomerProfilePage';
 import CashDrawerPage from '@/pages/CashDrawerPage';
 import InventoryPage from '@/pages/InventoryPage';
 import LabelGeneratorPage from '@/pages/LabelGeneratorPage';
@@ -108,6 +110,8 @@ export default function App() {
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<ProtectedRoute requiredModule="dashboard"><DashboardPage /></ProtectedRoute>} />
           <Route path="customer" element={<ProtectedRoute requiredModule="customer"><CustomerVisitPage /></ProtectedRoute>} />
+          <Route path="customers" element={<ProtectedRoute requiredModule="customer"><CustomersPage /></ProtectedRoute>} />
+          <Route path="customers/:customerId" element={<ProtectedRoute requiredModule="customer"><CustomerProfilePage /></ProtectedRoute>} />
           <Route path="drawer" element={<ProtectedRoute requiredModule="drawer"><CashDrawerPage /></ProtectedRoute>} />
           <Route path="inventory" element={<ProtectedRoute requiredModule="inventory"><InventoryPage /></ProtectedRoute>} />
           <Route path="labels" element={<ProtectedRoute requiredModule="labels"><LabelGeneratorPage /></ProtectedRoute>} />
