@@ -1,6 +1,6 @@
 // ── Role & Enum Types ──
 export type EmployeeRole = 'admin' | 'manager' | 'cashier' | 'buyer';
-export type DeviceCondition = 'mint' | 'excellent' | 'good' | 'fair' | 'poor' | 'for-parts';
+export type DeviceCondition = 'mint' | 'new' | 'open-box' | 'excellent' | 'very-good' | 'good' | 'fair' | 'poor' | 'for-parts';
 export type TaxMode = 'both' | 'gst-only' | 'pst-only' | 'exempt';
 export type PaymentMethod = 'cash' | 'debit' | 'credit' | 'etransfer' | 'store-credit' | 'other';
 export type SalesChannel = 'in-store' | 'online' | 'phone' | 'marketplace';
@@ -88,6 +88,43 @@ export interface PurchaseTransaction {
   createdAt: string;
 }
 
+export type TestResult = 'pass' | 'fail' | 'not-tested';
+
+export interface DeviceAccessory {
+  id: string;
+  included: boolean;
+  quantity?: number;
+  note?: string;
+}
+
+export interface DeviceStorageDrive {
+  type: string;
+  capacity: string;
+}
+
+export interface DeviceLens {
+  brand: string;
+  model: string;
+  focalLength: string;
+  maxAperture: string;
+  serialNumber: string;
+}
+
+/** Structured category-specific attributes stored as JSONB. Missing on older records. */
+export interface DeviceSpecifications {
+  categoryId?: string;
+  modelNumber?: string;
+  color?: string;
+  upcSku?: string;
+  accessories?: DeviceAccessory[];
+  otherAccessories?: string;
+  tests?: Record<string, TestResult | string>;
+  conditionDetails?: Record<string, string>;
+  storage?: DeviceStorageDrive[];
+  lenses?: DeviceLens[];
+  [key: string]: unknown;
+}
+
 // ── Purchase Item ──
 export interface PurchaseItem {
   id: string;
@@ -105,6 +142,8 @@ export interface PurchaseItem {
   condition: DeviceCondition;
   inscription: string;
   photos: string[];
+  specifications?: DeviceSpecifications;
+  listingTitle?: string;
   createdAt: string;
 }
 
@@ -149,6 +188,8 @@ export interface InventoryItem {
   labelPrintCount: number;
   lastLabelPrintAt: string | null;
   lastLabelPrintBy: string | null;
+  specifications?: DeviceSpecifications;
+  listingTitle?: string;
 }
 
 // ── Location History (audit trail for inventory storage moves) ──

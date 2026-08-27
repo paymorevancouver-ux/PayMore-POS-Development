@@ -30,6 +30,8 @@ import {
 import { CATEGORIES, INVENTORY_STATUSES } from '@/constants/config';
 import BarcodeLabelDialog from '@/components/features/BarcodeLabelDialog';
 import LocationAssignmentDialog from '@/components/features/LocationAssignmentDialog';
+import InventorySpecsEditor from '@/components/features/InventorySpecsEditor';
+import { flattenSpecsForDisplay, includedAccessories } from '@/lib/deviceSpecs';
 import type { InventoryStatus, InventoryItem, LocationHistoryEntry } from '@/types';
 
 type Section = 'all' | 'non-listed' | 'available' | 'sold' | 'returned' | 'scrapped';
@@ -70,6 +72,7 @@ export default function InventoryPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [showDetail, setShowDetail] = useState<InventoryItem | null>(null);
   const [showEdit, setShowEdit] = useState(false);
+  const [showSpecsEdit, setShowSpecsEdit] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [locHistory, setLocHistory] = useState<LocationHistoryEntry[]>([]);
 
@@ -356,6 +359,22 @@ export default function InventoryPage() {
     setShowEdit(false);
     setShowDetail({ ...showDetail, ...editForm });
     toast({ title: 'Item updated' });
+  };
+
+  const handleSpecsSave = (updates: { specifications: InventoryItem['specifications']; listingTitle: string; photos?: string[] }) => {
+    if (!showDetail || !employee) return;
+    pos.updateInventoryItem(showDetail.id, {
+      specifications: updates.specifications,
+      listingTitle: updates.listingTitle,
+    });
+    if (updates.photos && showDetail.sourcePurchaseItemId) {
+      pos.updatePurchaseItem(showDetail.sourcePurchaseItemId, { photos: updates.photos });
+    }
+    pos.logAction(employee.id, employee.fullName, 'Inventory', 'INVENTORY_SPECS_EDIT', 'inventory', showDetail.id,
+      `Updated specifications for ${showDetail.brand} ${showDetail.model}`);
+    setShowDetail({ ...showDetail, specifications: updates.specifications, listingTitle: updates.listingTitle });
+    setShowSpecsEdit(false);
+    toast({ title: 'Specifications updated' });
   };
 
   const openDetail = (item: InventoryItem) => {
@@ -871,7 +890,7 @@ export default function InventoryPage() {
 
       {/* ═══ ITEM DETAIL / EDIT DIALOG ═══ */}
       <Dialog open={!!showDetail} onOpenChange={(open) => { if (!open) { setShowDetail(null); setShowEdit(false); setShowHistory(false); } }}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           {showDetail && (
             <>
               <DialogHeader>
@@ -996,6 +1015,33 @@ export default function InventoryPage() {
                       </div>
                     )}
 
+                    <div className="rounded-lg border border-border p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-semibold">Specifications</p>
+                        {showDetail.status !== 'sold' && showDetail.status !== 'scrapped' && (
+                          <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => setShowSpecsEdit(true)}>
+                            <Edit2 className="size-3 mr-1" />Edit Specs
+                          </Button>
+                        )}
+                      </div>
+                      <p className="text-[12px] font-medium">{showDetail.listingTitle || '—'}</p>
+                      {flattenSpecsForDisplay(showDetail.specifications).length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">Not Recorded</p>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                          {flattenSpecsForDisplay(showDetail.specifications).slice(0, 16).map((row) => (
+                            <div key={row.label}>
+                              <span className="text-muted-foreground capitalize">{row.label.replace(/\./g, ' / ')}:</span>{' '}
+                              <span className="font-medium">{row.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {includedAccessories(showDetail.specifications) && (
+                        <p className="text-[11px]"><span className="text-muted-foreground">Accessories:</span> {includedAccessories(showDetail.specifications)}</p>
+                      )}
+                    </div>
+
                     {/* Location History */}
                     <div className="space-y-2">
                       <button
@@ -1068,9 +1114,14 @@ export default function InventoryPage() {
                     {/* Action buttons */}
                     <div className="flex gap-2 flex-wrap">
                       {showDetail.status !== 'sold' && showDetail.status !== 'scrapped' && (
-                        <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => setShowEdit(true)}>
-                          <Edit2 className="size-3 mr-1.5" />Edit Prices
-                        </Button>
+                        <>
+                          <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => setShowEdit(true)}>
+                            <Edit2 className="size-3 mr-1.5" />Edit Prices
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => setShowSpecsEdit(true)}>
+                            <Edit2 className="size-3 mr-1.5" />Edit Specs
+                          </Button>
+                        </>
                       )}
                       {showDetail.status === 'available' && (
                         <Button size="sm" className="h-8 text-[11px]" onClick={() => { handleMarkAvailable(showDetail); setShowDetail(null); }}>
@@ -1130,6 +1181,16 @@ export default function InventoryPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <InventorySpecsEditor
+        open={showSpecsEdit}
+        onOpenChange={setShowSpecsEdit}
+        item={showDetail}
+        purchaseItem={showDetail?.sourcePurchaseItemId
+          ? pos.purchaseItems.find((p) => p.id === showDetail.sourcePurchaseItemId)
+          : undefined}
+        onSave={handleSpecsSave}
+      />
     </div>
   );
 }

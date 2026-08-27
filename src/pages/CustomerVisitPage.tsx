@@ -17,14 +17,14 @@ import {
   QrCode, Camera,
 } from 'lucide-react';
 import { formatCurrency, round2 } from '@/lib/taxCalc';
-import { DEVICE_CONDITIONS, CATEGORIES, PAYMENT_METHODS, ID_TYPES, PROVINCES } from '@/constants/config';
+import { PAYMENT_METHODS, ID_TYPES, PROVINCES } from '@/constants/config';
 import BookLabelDialog from '@/components/features/BookLabelDialog';
 import IdScanner from '@/components/features/IdScanner';
 import type { ScanResult } from '@/components/features/IdScanner';
 import QrIdScanner from '@/components/features/QrIdScanner';
-import DevicePhotoCapture from '@/components/features/DevicePhotoCapture';
+import AddDeviceDialog, { type DeviceIntakeValue } from '@/components/features/AddDeviceDialog';
 import CustomerHistoryPanel from '@/components/features/CustomerHistoryPanel';
-import type { Customer, DeviceCondition, PaymentMethod, IdType } from '@/types';
+import type { Customer, PaymentMethod, IdType } from '@/types';
 
 // ── Validation helpers ──
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -126,14 +126,6 @@ export default function CustomerVisitPage() {
     postalCode: '', phone: '', email: '', sex: '', race: '', weight: '', height: '', notes: '',
   };
   const [custForm, setCustForm] = useState(emptyCust);
-
-  // Device form
-  const emptyDevice = {
-    category: 'Smartphones', brand: '', model: '', serialImei: '',
-    quantity: 1, buyPrice: 0, isDeal: true, conditionNotes: '',
-    condition: 'good' as DeviceCondition, estimatedPrice: 0, inscription: '', photos: [] as string[],
-  };
-  const [deviceForm, setDeviceForm] = useState(emptyDevice);
 
   // Payment
   const [payMethod, setPayMethod] = useState<PaymentMethod>('cash');
@@ -348,19 +340,23 @@ export default function CustomerVisitPage() {
     }
   };
 
-  const handleAddDevice = () => {
-    if (!purchaseId || !deviceForm.brand || !deviceForm.model) {
+  const handleAddDevice = (value: DeviceIntakeValue) => {
+    if (!purchaseId || !value.brand || !value.model) {
       toast({ variant: 'destructive', title: 'Required', description: 'Brand and model are required.' });
       return;
     }
-    if (!deviceForm.estimatedPrice || deviceForm.estimatedPrice <= 0) {
+    if (!value.estimatedPrice || value.estimatedPrice <= 0) {
       toast({ variant: 'destructive', title: 'Estimated Sell Price required', description: 'Please enter the expected selling price before adding the device.' });
       return;
     }
-    const { estimatedPrice, ...itemData } = deviceForm;
-    pos.addPurchaseItem(purchaseId, { ...itemData, estimatedSalePrice: estimatedPrice });
+    const { estimatedPrice, listingTitle, specifications, ...itemData } = value;
+    pos.addPurchaseItem(purchaseId, {
+      ...itemData,
+      estimatedSalePrice: estimatedPrice,
+      listingTitle,
+      specifications,
+    });
     setShowDeviceDialog(false);
-    setDeviceForm(emptyDevice);
     toast({ title: 'Device added' });
   };
 
@@ -911,7 +907,7 @@ export default function CustomerVisitPage() {
                                 {idx + 1}
                               </div>
                               <div>
-                                <p className="text-[13px] font-semibold">{item.brand} {item.model}</p>
+                                <p className="text-[13px] font-semibold">{item.listingTitle || `${item.brand} ${item.model}`}</p>
                                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                                   <Badge variant="outline" className="text-[9px] capitalize">{item.condition}</Badge>
                                   <Badge variant={item.isDeal ? 'default' : 'secondary'} className="text-[9px]">
@@ -1165,108 +1161,11 @@ export default function CustomerVisitPage() {
         onScan={step === 'customer-form' ? handleFormScanResult : handleScanResult}
       />
 
-      {/* ════════════ ADD DEVICE DIALOG ════════════ */}
-      <Dialog open={showDeviceDialog} onOpenChange={setShowDeviceDialog}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Add Device — What is the customer selling?</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 mt-2">
-            <div>
-              <Label className="text-[11px] font-medium">Category</Label>
-              <Select value={deviceForm.category} onValueChange={(v) => setDeviceForm({ ...deviceForm, category: v })}>
-                <SelectTrigger className="mt-1 h-9 text-[12px]"><SelectValue /></SelectTrigger>
-                <SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-[11px] font-medium">Condition</Label>
-              <Select value={deviceForm.condition} onValueChange={(v) => setDeviceForm({ ...deviceForm, condition: v as DeviceCondition })}>
-                <SelectTrigger className="mt-1 h-9 text-[12px]"><SelectValue /></SelectTrigger>
-                <SelectContent>{DEVICE_CONDITIONS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-[11px] font-medium">Brand *</Label>
-              <Input value={deviceForm.brand} onChange={(e) => setDeviceForm({ ...deviceForm, brand: e.target.value })} className="mt-1 h-9 text-[12px]" placeholder="e.g. Apple" />
-            </div>
-            <div>
-              <Label className="text-[11px] font-medium">Model *</Label>
-              <Input value={deviceForm.model} onChange={(e) => setDeviceForm({ ...deviceForm, model: e.target.value })} className="mt-1 h-9 text-[12px]" placeholder="e.g. iPhone 14 Pro" />
-            </div>
-            <div>
-              <Label className="text-[11px] font-medium">Serial / IMEI</Label>
-              <Input value={deviceForm.serialImei} onChange={(e) => setDeviceForm({ ...deviceForm, serialImei: e.target.value })} className="mt-1 h-9 text-[12px] font-mono" />
-            </div>
-            <div>
-              <Label className="text-[11px] font-medium">Quantity</Label>
-              <div className="flex items-center gap-1 mt-1">
-                <Button size="sm" variant="outline" className="h-9 w-9 p-0" onClick={() => setDeviceForm({ ...deviceForm, quantity: Math.max(1, deviceForm.quantity - 1) })}>-</Button>
-                <Input type="number" value={deviceForm.quantity} min={1}
-                  onChange={(e) => setDeviceForm({ ...deviceForm, quantity: Math.max(1, Number(e.target.value)) })}
-                  className="h-9 text-center text-[12px] font-mono w-16" />
-                <Button size="sm" variant="outline" className="h-9 w-9 p-0" onClick={() => setDeviceForm({ ...deviceForm, quantity: deviceForm.quantity + 1 })}>+</Button>
-              </div>
-            </div>
-
-            {/* Price section */}
-            <div className="col-span-2 grid grid-cols-2 gap-4 p-3 bg-secondary/50 rounded-lg">
-              <div>
-                <Label className="text-[11px] font-medium text-primary">Offer Price ($) *</Label>
-                <p className="text-[9px] text-muted-foreground mb-1">What we pay the customer</p>
-                <Input type="number" value={deviceForm.buyPrice || ''} step="0.01"
-                  onChange={(e) => setDeviceForm({ ...deviceForm, buyPrice: Number(e.target.value) })}
-                  className="h-10 text-[14px] font-mono font-semibold border-primary/30 focus-visible:ring-primary" />
-              </div>
-              <div>
-                <Label className="text-[11px] font-medium">Estimated Sell Price ($) *</Label>
-                <p className="text-[9px] text-muted-foreground mb-1">Expected resale value</p>
-                <Input type="number" value={deviceForm.estimatedPrice || ''} step="0.01"
-                  onChange={(e) => setDeviceForm({ ...deviceForm, estimatedPrice: Number(e.target.value) })}
-                  className="h-10 text-[14px] font-mono" />
-              </div>
-            </div>
-
-            <div className="col-span-2 flex items-center gap-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={deviceForm.isDeal}
-                  onChange={(e) => setDeviceForm({ ...deviceForm, isDeal: e.target.checked })} className="rounded" />
-                <span className="text-[12px] font-medium">Deal — Accept & add to inventory</span>
-              </label>
-              {!deviceForm.isDeal && (
-                <Badge variant="secondary" className="text-[9px]">No Deal — Will not be inventoried</Badge>
-              )}
-            </div>
-
-            <div className="col-span-2">
-              <DevicePhotoCapture
-                photos={deviceForm.photos}
-                onChange={(photos) => setDeviceForm({ ...deviceForm, photos })}
-              />
-            </div>
-
-            <div className="col-span-2">
-              <Label className="text-[11px] font-medium">Inscription</Label>
-              <Input value={deviceForm.inscription}
-                onChange={(e) => setDeviceForm({ ...deviceForm, inscription: e.target.value })}
-                className="mt-1 h-9 text-[12px]" placeholder="Any inscription or engraving on the device…" />
-            </div>
-
-            <div className="col-span-2">
-              <Label className="text-[11px] font-medium">Staff Notes / Condition Details</Label>
-              <Textarea value={deviceForm.conditionNotes}
-                onChange={(e) => setDeviceForm({ ...deviceForm, conditionNotes: e.target.value })}
-                className="mt-1 text-[12px] min-h-[50px]" placeholder="Screen condition, battery health, accessories included…" />
-            </div>
-          </div>
-          <div className="flex gap-2 mt-3">
-            <Button onClick={handleAddDevice} className="flex-1 h-10 text-[13px]" disabled={!deviceForm.brand || !deviceForm.model}>
-              <Plus className="size-4 mr-1.5" />Add Device
-            </Button>
-            <Button variant="outline" className="h-10" onClick={() => setShowDeviceDialog(false)}>Cancel</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AddDeviceDialog
+        open={showDeviceDialog}
+        onOpenChange={setShowDeviceDialog}
+        onSave={handleAddDevice}
+      />
     </div>
   );
 }

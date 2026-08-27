@@ -102,6 +102,8 @@ function mapPurchaseItem(r: Record<string, unknown>): PurchaseItem {
     serialImei: r.serial_imei as string || '', condition: r.condition as PurchaseItem['condition'],
     conditionNotes: r.condition_notes as string || '', inscription: r.inscription as string || '',
     photos: (r.photos as string[]) || [],
+    specifications: (r.specifications as PurchaseItem['specifications']) || {},
+    listingTitle: (r.listing_title as string) || '',
     quantity: Number(r.quantity), buyPrice: Number(r.buy_price),
     estimatedSalePrice: Number(r.estimated_sale_price) || 0,
     isDeal: r.is_deal as boolean, createdAt: r.created_at as string,
@@ -140,6 +142,8 @@ function mapInventory(r: Record<string, unknown>): InventoryItem {
     labelPrintCount: Number(r.label_print_count) || 0,
     lastLabelPrintAt: (r.last_label_print_at as string) || null,
     lastLabelPrintBy: (r.last_label_print_by as string) || null,
+    specifications: (r.specifications as InventoryItem['specifications']) || {},
+    listingTitle: (r.listing_title as string) || '',
   };
 }
 
@@ -401,7 +405,7 @@ export const db = {
     return this.getPurchaseItems(ids);
   },
   async insertPurchaseItem(item: PurchaseItem): Promise<boolean> {
-    return !!await insert('pos_purchase_items', {
+    const base = {
       id: item.id, purchase_transaction_id: item.purchaseTransactionId,
       line_number: item.lineNumber, category: item.category,
       brand: item.brand, model: item.model, serial_imei: item.serialImei,
@@ -410,7 +414,29 @@ export const db = {
       quantity: item.quantity, buy_price: item.buyPrice,
       estimated_sale_price: item.estimatedSalePrice,
       is_deal: item.isDeal, created_at: item.createdAt,
-    });
+    };
+    const withSpecs = {
+      ...base,
+      specifications: item.specifications || {},
+      listing_title: item.listingTitle || '',
+    };
+    const saved = await insert('pos_purchase_items', withSpecs);
+    if (saved) return true;
+    return !!await insert('pos_purchase_items', base);
+  },
+  async updatePurchaseItem(id: string, updates: Partial<PurchaseItem>): Promise<boolean> {
+    const mapped: Record<string, unknown> = {};
+    if (updates.photos !== undefined) mapped.photos = updates.photos;
+    if (updates.specifications !== undefined) mapped.specifications = updates.specifications;
+    if (updates.listingTitle !== undefined) mapped.listing_title = updates.listingTitle;
+    if (updates.brand !== undefined) mapped.brand = updates.brand;
+    if (updates.model !== undefined) mapped.model = updates.model;
+    if (updates.serialImei !== undefined) mapped.serial_imei = updates.serialImei;
+    if (updates.category !== undefined) mapped.category = updates.category;
+    if (updates.conditionNotes !== undefined) mapped.condition_notes = updates.conditionNotes;
+    if (updates.inscription !== undefined) mapped.inscription = updates.inscription;
+    if (Object.keys(mapped).length === 0) return true;
+    return update('pos_purchase_items', id, mapped);
   },
   async deletePurchaseItem(id: string): Promise<boolean> { return deleteRow('pos_purchase_items', id); },
 
@@ -444,7 +470,7 @@ export const db = {
     return rows.map(mapInventory);
   },
   async insertInventory(storeId: string, item: InventoryItem): Promise<boolean> {
-    return !!await insert('pos_inventory', {
+    const base = {
       id: item.id, store_id: storeId, device_code: item.deviceCode,
       source_purchase_item_id: item.sourcePurchaseItemId || null,
       visit_id: item.visitId || null,
@@ -453,7 +479,15 @@ export const db = {
       cost_per_unit: item.costPerUnit, expected_sale_price: item.expectedSalePrice,
       status: item.status, acquired_at: item.acquiredAt, sold_at: item.soldAt,
       notes: item.notes,
-    });
+    };
+    const withSpecs = {
+      ...base,
+      specifications: item.specifications || {},
+      listing_title: item.listingTitle || '',
+    };
+    const saved = await insert('pos_inventory', withSpecs);
+    if (saved) return true;
+    return !!await insert('pos_inventory', base);
   },
   async updateInventory(id: string, updates: Partial<InventoryItem>): Promise<boolean> {
     const mapped: Record<string, unknown> = {};
@@ -475,6 +509,12 @@ export const db = {
     if (updates.labelPrintCount !== undefined) mapped.label_print_count = updates.labelPrintCount;
     if (updates.lastLabelPrintAt !== undefined) mapped.last_label_print_at = updates.lastLabelPrintAt;
     if (updates.lastLabelPrintBy !== undefined) mapped.last_label_print_by = updates.lastLabelPrintBy;
+    if (updates.specifications !== undefined) mapped.specifications = updates.specifications;
+    if (updates.listingTitle !== undefined) mapped.listing_title = updates.listingTitle;
+    if (updates.category !== undefined) mapped.category = updates.category;
+    if (updates.brand !== undefined) mapped.brand = updates.brand;
+    if (updates.model !== undefined) mapped.model = updates.model;
+    if (updates.serialImei !== undefined) mapped.serial_imei = updates.serialImei;
     return update('pos_inventory', id, mapped);
   },
 

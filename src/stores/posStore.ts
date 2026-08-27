@@ -79,6 +79,7 @@ interface PosState {
   // Purchase
   createPurchase: (visitId: string, customerId: string, employeeId: string, storeId: string) => string;
   addPurchaseItem: (purchaseId: string, item: Omit<PurchaseItem, 'id' | 'purchaseTransactionId' | 'lineNumber' | 'createdAt'>) => string;
+  updatePurchaseItem: (itemId: string, updates: Partial<PurchaseItem>) => void;
   removePurchaseItem: (purchaseId: string, itemId: string) => void;
   addPurchasePayment: (purchaseId: string, method: PaymentMethod, amount: number, reference?: string) => void;
   removePurchasePayment: (paymentId: string) => void;
@@ -354,6 +355,10 @@ export const usePosStore = create<PosState>()(
       db.updatePurchase(purchaseId, { subtotal, totalAmount: subtotal });
       return id;
     },
+    updatePurchaseItem: (itemId, updates) => {
+      set((s) => ({ purchaseItems: s.purchaseItems.map((i) => i.id === itemId ? { ...i, ...updates } : i) }));
+      db.updatePurchaseItem(itemId, updates);
+    },
     removePurchaseItem: (purchaseId, itemId) => {
       set((s) => {
         const newItems = s.purchaseItems.filter((i) => i.id !== itemId);
@@ -398,6 +403,8 @@ export const usePosStore = create<PosState>()(
           serialImei: item.serialImei, quantityOnHand: item.quantity,
           costPerUnit: item.buyPrice, expectedSalePrice: item.estimatedSalePrice || 0,
           status: 'available', storeId, notes: item.conditionNotes,
+          specifications: item.specifications || {},
+          listingTitle: item.listingTitle || '',
         });
       });
 

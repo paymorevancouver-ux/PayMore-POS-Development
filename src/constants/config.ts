@@ -30,15 +30,18 @@ export const SALES_CHANNELS = [
 ] as const;
 
 export const DEVICE_CONDITIONS = [
-  { value: 'mint', label: 'Mint', color: 'text-emerald-700 bg-emerald-50' },
+  { value: 'new', label: 'New', color: 'text-emerald-800 bg-emerald-50' },
+  { value: 'open-box', label: 'Open Box', color: 'text-cyan-700 bg-cyan-50' },
   { value: 'excellent', label: 'Excellent', color: 'text-teal-700 bg-teal-50' },
+  { value: 'very-good', label: 'Very Good', color: 'text-sky-700 bg-sky-50' },
   { value: 'good', label: 'Good', color: 'text-blue-700 bg-blue-50' },
   { value: 'fair', label: 'Fair', color: 'text-amber-700 bg-amber-50' },
+  { value: 'for-parts', label: 'For Parts / Not Working', color: 'text-slate-700 bg-slate-50' },
+  { value: 'mint', label: 'Mint', color: 'text-emerald-700 bg-emerald-50' },
   { value: 'poor', label: 'Poor', color: 'text-red-700 bg-red-50' },
-  { value: 'for-parts', label: 'For Parts', color: 'text-slate-700 bg-slate-50' },
 ] as const;
 
-export const CATEGORIES = [
+export const LEGACY_CATEGORIES = [
   'Smartphones',
   'Laptops',
   'Tablets',
@@ -50,6 +53,38 @@ export const CATEGORIES = [
   'Desktops',
   'Other',
 ] as const;
+
+export const DEVICE_CATEGORY_LABELS = [
+  'Apple iPhone',
+  'Android Phone',
+  'Windows Laptop',
+  'MacBook',
+  'Windows Desktop',
+  'Custom/Gaming PC',
+  'iMac / Mac Desktop',
+  'iPad',
+  'Android Tablet',
+  'Digital Camera',
+  'DSLR Camera',
+  'Mirrorless Camera',
+  'Action Camera',
+  'PlayStation Console',
+  'Xbox Console',
+  'Nintendo Console',
+  'Gaming Handheld',
+  'Apple Watch',
+  'Smartwatch',
+  'Headphones',
+  'Earbuds',
+  'Speakers',
+  'Monitor',
+  'GPU / Graphics Card',
+  'Computer Component',
+  'Other Electronics',
+] as const;
+
+/** Intake + filter list. Legacy labels remain so older inventory still filters. */
+export const CATEGORIES = [...DEVICE_CATEGORY_LABELS, ...LEGACY_CATEGORIES] as const;
 
 export const INVENTORY_STATUSES = [
   { value: 'available', label: 'Non-Listed', color: 'text-amber-700 bg-amber-50 border-amber-200' },
