@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { usePosStore } from '@/stores/posStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import {
   Check, X, DollarSign, ScanLine, Package, ArrowRight, ShoppingBag, AlertCircle, ImageIcon,
   QrCode, Camera, CreditCard,
 } from 'lucide-react';
-import { formatCurrency, formatDateTime, round2 } from '@/lib/taxCalc';
+import { formatCurrency, round2 } from '@/lib/taxCalc';
 import { DEVICE_CONDITIONS, CATEGORIES, PAYMENT_METHODS, ID_TYPES, PROVINCES } from '@/constants/config';
 import BookLabelDialog from '@/components/features/BookLabelDialog';
 import IdScanner from '@/components/features/IdScanner';
@@ -24,7 +24,7 @@ import type { ScanResult } from '@/components/features/IdScanner';
 import QrIdScanner from '@/components/features/QrIdScanner';
 import DevicePhotoCapture from '@/components/features/DevicePhotoCapture';
 import CustomerHistoryPanel from '@/components/features/CustomerHistoryPanel';
-import type { Customer, CustomerVisit, PurchaseTransaction, PurchaseItem, DeviceCondition, PaymentMethod, IdType } from '@/types';
+import type { Customer, DeviceCondition, PaymentMethod, IdType } from '@/types';
 
 // ── Validation helpers ──
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -96,6 +96,7 @@ export default function CustomerVisitPage() {
   const pos = usePosStore();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const preselectHandled = useRef(false);
   const fromBuyTrade = searchParams.get('from') === 'buy-trade';
   const actingEmployee = (fromBuyTrade && pos.actingEmployeeId
@@ -113,14 +114,6 @@ export default function CustomerVisitPage() {
   const [showLabelDialog, setShowLabelDialog] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
-
-  // Reprint state
-  const [showReprintDialog, setShowReprintDialog] = useState(false);
-  const [reprintCustomer, setReprintCustomer] = useState<Customer | null>(null);
-  const [reprintVisit, setReprintVisit] = useState<CustomerVisit | null>(null);
-  const [reprintPurchase, setReprintPurchase] = useState<PurchaseTransaction | null>(null);
-  const [reprintItems, setReprintItems] = useState<PurchaseItem[]>([]);
-  const [visitSearchQuery, setVisitSearchQuery] = useState('');
 
   // Customer form
   const emptyCust = {
@@ -186,26 +179,6 @@ export default function CustomerVisitPage() {
       c.phone.includes(q)
     ).slice(0, 20);
   }, [pos.customers, searchQuery]);
-
-
-
-  // Recent completed visits for reprint
-  const recentCompletedVisits = useMemo(() => {
-    const completedPurchaseVisitIds = new Set(pos.purchases.filter((p) => p.status === 'completed').map((p) => p.visitId));
-    let visits = pos.visits.filter((v) => completedPurchaseVisitIds.has(v.id));
-    if (visitSearchQuery.trim()) {
-      const q = visitSearchQuery.toLowerCase();
-      visits = visits.filter((v) => {
-        const cust = pos.customers.find((c) => c.id === v.customerId);
-        return v.visitCode.toLowerCase().includes(q) ||
-          (cust && `${cust.firstName} ${cust.lastName}`.toLowerCase().includes(q)) ||
-          (cust && cust.idNumber.toLowerCase().includes(q));
-      });
-    }
-    return visits.slice(0, 10);
-  }, [pos.visits, pos.purchases, pos.customers, visitSearchQuery]);
-
-  // ── Handlers ──
 
   const handleScanResult = (data: ScanResult) => {
     // Check if scanned ID matches an existing customer
@@ -418,23 +391,6 @@ export default function CustomerVisitPage() {
     setShowLabelDialog(true);
   };
 
-  const handleReprintVisit = (visit: CustomerVisit) => {
-    const cust = pos.customers.find((c) => c.id === visit.customerId) || null;
-    const purch = pos.purchases.find((p) => p.visitId === visit.id) || null;
-    const items = purch ? pos.purchaseItems.filter((i) => i.purchaseTransactionId === purch.id) : [];
-    setReprintCustomer(cust);
-    setReprintVisit(visit);
-    setReprintPurchase(purch);
-    setReprintItems(items);
-    setShowReprintDialog(true);
-  };
-
-  const handleReprintConfirm = () => {
-    if (!reprintVisit || !actingEmployee) return;
-    pos.printLabel(reprintVisit.id, actingEmployee.id);
-    toast({ title: 'Book label printed', description: `Visit ${reprintVisit.visitCode}` });
-  };
-
   const handleConfirmPrint = () => {
     if (!visitId || !actingEmployee) return;
     pos.printLabel(visitId, actingEmployee.id);
@@ -607,56 +563,15 @@ export default function CustomerVisitPage() {
                 </CardContent>
               </Card>
 
-              {/* Reprint from Visit History */}
-              <Card className="flex-1 overflow-hidden flex flex-col">
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-[13px]">Reprint Book Label — Visit History</CardTitle>
-                    <Badge variant="outline" className="text-[9px] font-mono">{recentCompletedVisits.length} visits</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex-1 overflow-hidden flex flex-col">
-                  <div className="relative mb-3">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-                    <Input placeholder="Search by Visit ID, customer name, or ID number…" value={visitSearchQuery}
-                      onChange={(e) => setVisitSearchQuery(e.target.value)} className="pl-9 h-8 text-[11px]" />
-                  </div>
-                  <div className="space-y-1 flex-1 overflow-y-auto">
-                    {recentCompletedVisits.map((v) => {
-                      const cust = pos.customers.find((c) => c.id === v.customerId);
-                      const purch = pos.purchases.find((p) => p.visitId === v.id);
-                      const itemCount = purch ? pos.purchaseItems.filter((i) => i.purchaseTransactionId === purch.id).length : 0;
-                      const labelLog = pos.labels.find((l) => l.visitId === v.id);
-                      return (
-                        <div key={v.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border hover:border-primary/20 hover:bg-primary/[0.02] transition-all">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-[11px] font-semibold text-primary">{v.visitCode}</span>
-                              {labelLog && <Badge variant="secondary" className="text-[8px]">Printed {labelLog.printCount}×</Badge>}
-                            </div>
-                            <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-                              <span className="font-medium text-foreground">{cust ? `${cust.firstName} ${cust.lastName}` : 'Unknown'}</span>
-                              <span>·</span>
-                              <span>{itemCount} device{itemCount !== 1 ? 's' : ''}</span>
-                              <span>·</span>
-                              <span className="font-mono">{purch ? formatCurrency(purch.totalAmount) : '$0.00'}</span>
-                              <span>·</span>
-                              <span>{formatDateTime(v.createdAt)}</span>
-                            </div>
-                          </div>
-                          <Button size="sm" variant="outline" className="h-7 text-[10px] shrink-0 ml-3"
-                            onClick={() => handleReprintVisit(v)}>
-                            <Printer className="size-3 mr-1" />Reprint
-                          </Button>
-                        </div>
-                      );
-                    })}
-                    {recentCompletedVisits.length === 0 && (
-                      <div className="text-center py-8">
-                        <p className="text-[11px] text-muted-foreground">No completed visits found</p>
-                      </div>
-                    )}
-                  </div>
+              <Card>
+                <CardContent className="pt-5 pb-4">
+                  <p className="text-[13px] font-semibold mb-1">Need a previous visit?</p>
+                  <p className="text-[12px] text-muted-foreground mb-3">
+                    Search historical Buy / Trade visits, devices, and reprint book labels from Customer Visit History.
+                  </p>
+                  <Button variant="outline" className="h-9 text-[12px]" onClick={() => navigate('/pos/customers/visits')}>
+                    Open Customer Visit History
+                  </Button>
                 </CardContent>
               </Card>
             </div>
@@ -1212,18 +1127,6 @@ export default function CustomerVisitPage() {
         purchaseItems={purchaseItems}
         labelLog={visitId ? pos.labels.find((l) => l.visitId === visitId) : undefined}
         onPrint={handleConfirmPrint}
-      />
-
-      {/* ════════════ REPRINT LABEL DIALOG ════════════ */}
-      <BookLabelDialog
-        open={showReprintDialog}
-        onOpenChange={setShowReprintDialog}
-        customer={reprintCustomer}
-        visit={reprintVisit}
-        purchase={reprintPurchase}
-        purchaseItems={reprintItems}
-        labelLog={reprintVisit ? pos.labels.find((l) => l.visitId === reprintVisit.id) : undefined}
-        onPrint={handleReprintConfirm}
       />
 
       {/* ════════════ ID SCANNER (DIRECT) ════════════ */}

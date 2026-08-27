@@ -2,19 +2,38 @@ import { useAuthStore } from '@/stores/authStore';
 import { usePosStore } from '@/stores/posStore';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, ContactRound, Landmark, Package, ShoppingCart, RotateCcw,
+  LayoutDashboard, ContactRound, Landmark, Package, ShoppingCart, RotateCcw,
   ArrowRightLeft, FileEdit, BarChart3, Settings, ScrollText, LogOut,
   UserCog, Tag,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/taxCalc';
+import type { LucideIcon } from 'lucide-react';
 
-const NAV_SECTIONS = [
+type NavChild = { path: string; label: string };
+
+type NavItem = {
+  path: string;
+  label: string;
+  icon: LucideIcon;
+  module: string;
+  children?: NavChild[];
+};
+
+const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
   {
     label: 'Main',
     items: [
       { path: '/pos/dashboard', label: 'Dashboard', icon: LayoutDashboard, module: 'dashboard' },
-      { path: '/pos/customer', label: 'Buy / Sell Visit', icon: Users, module: 'customer' },
-      { path: '/pos/customers', label: 'Customers', icon: ContactRound, module: 'customer' },
+      {
+        path: '/pos/customers',
+        label: 'Customers',
+        icon: ContactRound,
+        module: 'customer',
+        children: [
+          { path: '/pos/customers', label: 'Customer Management' },
+          { path: '/pos/customers/visits', label: 'Customer Visit History' },
+        ],
+      },
       { path: '/pos/drawer', label: 'Cash Drawer', icon: Landmark, module: 'drawer' },
     ],
   },
@@ -94,24 +113,51 @@ export default function Sidebar() {
             <p className="text-[9px] font-semibold text-sidebar-foreground/50 uppercase tracking-widest px-3 mb-1">{section.label}</p>
             <div className="space-y-0.5">
               {visibleItems.map((item) => {
-                const active = item.path === '/pos/customers'
-                  ? location.pathname === '/pos/customers' || location.pathname.startsWith('/pos/customers/')
+                const inCustomers = location.pathname === '/pos/customers'
+                  || location.pathname.startsWith('/pos/customers/');
+                const parentActive = item.children
+                  ? inCustomers
                   : location.pathname === item.path;
                 const Icon = item.icon;
                 return (
-                  <button
-                    key={item.path}
-                    onClick={() => navigate(item.path)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[12px] font-medium transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-sidebar-primary text-white'
-                        : 'text-sidebar-foreground hover:bg-white/[0.06] hover:text-white'
-                    }`}
-                  >
-                    <Icon className="size-[15px] shrink-0" />
-                    <span className="truncate">{item.label}</span>
-
-                  </button>
+                  <div key={item.path}>
+                    <button
+                      onClick={() => navigate(item.path)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[12px] font-medium transition-colors cursor-pointer ${
+                        parentActive && !item.children
+                          ? 'bg-sidebar-primary text-white'
+                          : parentActive
+                            ? 'bg-white/[0.06] text-white'
+                            : 'text-sidebar-foreground hover:bg-white/[0.06] hover:text-white'
+                      }`}
+                    >
+                      <Icon className="size-[15px] shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                    {item.children && (
+                      <div className="mt-0.5 ml-3 pl-3 border-l border-white/10 space-y-0.5">
+                        {item.children.map((child) => {
+                          const childActive = child.path === '/pos/customers/visits'
+                            ? location.pathname === '/pos/customers/visits'
+                            : location.pathname === '/pos/customers'
+                              || (location.pathname.startsWith('/pos/customers/') && location.pathname !== '/pos/customers/visits');
+                          return (
+                            <button
+                              key={child.path}
+                              onClick={() => navigate(child.path)}
+                              className={`w-full text-left px-2.5 py-[6px] rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
+                                childActive
+                                  ? 'bg-sidebar-primary text-white'
+                                  : 'text-sidebar-foreground hover:bg-white/[0.06] hover:text-white'
+                              }`}
+                            >
+                              {child.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>

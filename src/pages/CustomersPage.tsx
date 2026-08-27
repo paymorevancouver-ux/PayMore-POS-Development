@@ -7,10 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
-  Search, Users, Calendar, Package, ShoppingCart, DollarSign, Eye, ArrowRight,
+  Search, Users, Calendar, Package, ShoppingCart, DollarSign, Eye, ArrowLeftRight,
 } from 'lucide-react';
 import { formatCurrency, formatDate } from '@/lib/taxCalc';
 import { buildCustomerListRows, storewideCustomerKpis } from '@/lib/customerSearch';
+import CustomersSectionNav from '@/components/features/CustomersSectionNav';
+import EmployeeVerificationDialog from '@/components/features/EmployeeVerificationDialog';
+import { useStartBuyTrade } from '@/hooks/useStartBuyTrade';
 
 const PAGE_SIZE = 50;
 
@@ -19,6 +22,7 @@ export default function CustomersPage() {
   const pos = usePosStore();
   const { hasPermission } = useAuthStore();
   const canStartVisit = hasPermission('customer');
+  const { pinOpen, setPinOpen, startBuyTrade, onVerified } = useStartBuyTrade();
 
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -62,14 +66,17 @@ export default function CustomersPage() {
   ];
 
   const startVisit = (customerId: string) => {
-    navigate(`/pos/customer?customerId=${encodeURIComponent(customerId)}&t=${Date.now()}`);
+    startBuyTrade(customerId);
   };
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-foreground">Customer Management</h1>
-        <p className="text-sm text-muted-foreground">Search and review complete customer history</p>
+      <div className="flex flex-col gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-foreground">Customer Management</h1>
+          <p className="text-sm text-muted-foreground">Search and review complete customer history</p>
+        </div>
+        <CustomersSectionNav />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
@@ -148,7 +155,7 @@ export default function CustomersPage() {
                         </Button>
                         {canStartVisit && (
                           <Button size="sm" className="h-7 text-[10px]" onClick={() => startVisit(c.id)}>
-                            <ArrowRight className="size-3 mr-1" />Start New Visit
+                            <ArrowLeftRight className="size-3 mr-1" />Start New Buy / Trade
                           </Button>
                         )}
                       </div>
@@ -177,6 +184,12 @@ export default function CustomersPage() {
           <Button size="sm" variant="outline" className="h-7" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
         </div>
       </div>
+
+      <EmployeeVerificationDialog
+        open={pinOpen}
+        onOpenChange={setPinOpen}
+        onVerified={onVerified}
+      />
     </div>
   );
 }

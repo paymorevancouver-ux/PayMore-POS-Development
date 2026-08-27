@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import {
-  ArrowLeft, ArrowRight, User, Phone, Mail, Calendar, Store, StickyNote,
+  ArrowLeft, ArrowLeftRight, User, Phone, Mail, Calendar, Store, StickyNote,
   Printer, Pencil, ChevronDown, ChevronRight, Package, FileText, CreditCard, MapPin, History,
 } from 'lucide-react';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/taxCalc';
@@ -32,6 +32,8 @@ import {
 } from '@/lib/customer360';
 import { ID_TYPES, PAYMENT_METHODS, PROVINCES } from '@/constants/config';
 import type { Customer, IdType } from '@/types';
+import EmployeeVerificationDialog from '@/components/features/EmployeeVerificationDialog';
+import { useStartBuyTrade } from '@/hooks/useStartBuyTrade';
 
 function paymentLabel(method: string): string {
   return PAYMENT_METHODS.find((m) => m.value === method)?.label || method;
@@ -80,6 +82,7 @@ export default function CustomerProfilePage() {
   const customer = pos.customers.find((c) => c.id === customerId);
   const canStartVisit = hasPermission('customer');
   const canEditNotes = employee?.role === 'admin' || employee?.role === 'manager';
+  const { pinOpen, setPinOpen, startBuyTrade, onVerified } = useStartBuyTrade();
 
   const employeesById = useMemo(() => {
     const map = new Map<string, string>();
@@ -175,7 +178,8 @@ export default function CustomerProfilePage() {
   };
 
   const startVisit = () => {
-    navigate(`/pos/customer?customerId=${encodeURIComponent(customer.id)}&t=${Date.now()}`);
+    if (!customer) return;
+    startBuyTrade(customer.id);
   };
 
   const printHistory = () => {
@@ -228,7 +232,7 @@ export default function CustomerProfilePage() {
             <div className="flex flex-wrap gap-2 shrink-0">
               {canStartVisit && (
                 <Button size="sm" className="h-8 text-[12px]" onClick={startVisit}>
-                  <ArrowRight className="size-3.5 mr-1" />Start New Visit
+                  <ArrowLeftRight className="size-3.5 mr-1" />Start New Buy / Trade
                 </Button>
               )}
               <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={openEdit}>
@@ -741,6 +745,12 @@ export default function CustomerProfilePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <EmployeeVerificationDialog
+        open={pinOpen}
+        onOpenChange={setPinOpen}
+        onVerified={onVerified}
+      />
     </div>
   );
 }

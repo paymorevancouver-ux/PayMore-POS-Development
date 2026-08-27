@@ -5,8 +5,9 @@ import { useState, useEffect } from 'react';
 
 const TITLES: Record<string, string> = {
   '/pos/dashboard': 'Dashboard',
-  '/pos/customer': 'Customer Buy / Sell Visit',
+  '/pos/customer': 'Buy / Trade',
   '/pos/customers': 'Customers',
+  '/pos/customers/visits': 'Customer Visit History',
   '/pos/drawer': 'Cash Drawer',
   '/pos/inventory': 'Inventory Management',
   '/pos/sales': 'Sales',
@@ -28,9 +29,8 @@ export default function Header() {
     return () => clearInterval(t);
   }, []);
 
-  const title = location.pathname.startsWith('/pos/customers')
-    ? 'Customers'
-    : (TITLES[location.pathname] || 'Paymore POS');
+  const title = TITLES[location.pathname]
+    || (location.pathname.startsWith('/pos/customers/') ? 'Customers' : 'Paymore POS');
 
   return (
     <header className="h-[52px] bg-card border-b border-border flex items-center justify-between px-6 shrink-0">
