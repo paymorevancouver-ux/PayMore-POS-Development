@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canPerformBuyTrade, findActiveEmployeeByPin } from './employeePin';
+import { canAdjustCashDrawer, canPerformBuyTrade, findActiveEmployeeByPin, verifyEmployeeForAction } from './employeePin';
 import type { Employee } from '@/types';
 
 const employees: Employee[] = [
@@ -36,5 +36,32 @@ describe('employeePin', () => {
     expect(canPerformBuyTrade('buyer')).toBe(true);
     expect(canPerformBuyTrade('admin')).toBe(true);
     expect(canPerformBuyTrade('cashier')).toBe(true);
+  });
+
+  it('allows roles with drawer permission to make cash drawer changes', () => {
+    expect(canAdjustCashDrawer('admin')).toBe(true);
+    expect(canAdjustCashDrawer('manager')).toBe(true);
+    expect(canAdjustCashDrawer('cashier')).toBe(true);
+    expect(canAdjustCashDrawer('buyer')).toBe(true);
+  });
+
+  it('attributes a valid PIN to that employee, not a logged-in admin', () => {
+    const result = verifyEmployeeForAction(employees, '2468', canAdjustCashDrawer);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.employee.id).toBe('EMP-NITESH');
+      expect(result.employee.fullName).toBe('Nitesh');
+      expect(result.employee.id).not.toBe('EMP-ADMIN');
+    }
+  });
+
+  it('rejects a valid PIN when the employee lacks the action permission', () => {
+    const result = verifyEmployeeForAction(employees, '2468', () => false);
+    expect(result).toEqual({ ok: false, reason: 'permission' });
+  });
+
+  it('rejects an invalid PIN before checking permission', () => {
+    const result = verifyEmployeeForAction(employees, '0000', canPerformBuyTrade);
+    expect(result).toEqual({ ok: false, reason: 'invalid' });
   });
 });

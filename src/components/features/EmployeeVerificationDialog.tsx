@@ -3,36 +3,44 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import PinPad from '@/components/features/PinPad';
 import { useAuthStore } from '@/stores/authStore';
-import { canPerformBuyTrade, findActiveEmployeeByPin } from '@/lib/employeePin';
-import type { Employee } from '@/types';
+import { canPerformBuyTrade, verifyEmployeeForAction } from '@/lib/employeePin';
+import type { Employee, EmployeeRole } from '@/types';
 
 interface EmployeeVerificationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onVerified: (employee: Employee) => void;
+  title?: string;
+  description?: string;
+  permissionCheck?: (role: EmployeeRole) => boolean;
+  permissionDeniedMessage?: string;
 }
 
 export default function EmployeeVerificationDialog({
   open,
   onOpenChange,
   onVerified,
+  title = 'Employee Verification',
+  description = 'Enter your PIN to start a Buy / Trade transaction',
+  permissionCheck = canPerformBuyTrade,
+  permissionDeniedMessage = 'You do not have permission to start a Buy / Trade transaction.',
 }: EmployeeVerificationDialogProps) {
   const employees = useAuthStore((s) => s.employees);
   const [error, setError] = useState('');
 
   const handleSubmit = (pin: string) => {
-    const emp = findActiveEmployeeByPin(employees, pin);
-    if (!emp) {
-      setError('Invalid PIN. Please try again.');
-      return;
-    }
-    if (!canPerformBuyTrade(emp.role)) {
-      setError('You do not have permission to start a Buy / Trade transaction.');
+    const result = verifyEmployeeForAction(employees, pin, permissionCheck);
+    if (!result.ok) {
+      setError(
+        result.reason === 'permission'
+          ? permissionDeniedMessage
+          : 'Invalid PIN. Please try again.',
+      );
       return;
     }
     setError('');
+    onVerified(result.employee);
     onOpenChange(false);
-    onVerified(emp);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -44,9 +52,9 @@ export default function EmployeeVerificationDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle className="text-[16px]">Employee Verification</DialogTitle>
+          <DialogTitle className="text-[16px]">{title}</DialogTitle>
           <DialogDescription className="text-[13px]">
-            Enter your PIN to start a Buy / Trade transaction
+            {description}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col items-center pt-1">

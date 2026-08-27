@@ -124,7 +124,7 @@ interface PosState {
   // Cash Drawer
   openDrawer: (amount: number, employeeId: string, storeId: string, employeeName: string) => void;
   closeDrawer: (employeeId: string, storeId: string, employeeName: string) => void;
-  addDrawerEntry: (type: CashDrawerEntry['entryType'], amount: number, notes: string, employeeId: string, storeId: string, refType?: string, refId?: string) => void;
+  addDrawerEntry: (type: CashDrawerEntry['entryType'], amount: number, notes: string, employeeId: string, storeId: string, refType?: string, refId?: string) => CashDrawerEntry;
 
   // Labels
   printLabel: (visitId: string, employeeId: string) => void;
@@ -838,6 +838,7 @@ export const usePosStore = create<PosState>()(
       set((s) => ({ cashDrawer: { ...s.cashDrawer, currentBalance: balance, entries: [...s.cashDrawer.entries, entry] } }));
       db.upsertCashDrawer(storeId, { isOpen: state.cashDrawer.isOpen, openedAt: state.cashDrawer.openedAt, openedBy: state.cashDrawer.openedBy, openingBalance: state.cashDrawer.openingBalance, currentBalance: balance });
       db.insertDrawerEntry(storeId, entry);
+      return entry;
     },
 
     // ── Labels ──
