@@ -1,18 +1,29 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { usePosStore } from '@/stores/posStore';
 import { useAuthStore } from '@/stores/authStore';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   ShoppingCart, Package, DollarSign, Users, TrendingUp,
-  RotateCcw, Landmark, ArrowDown, ArrowUp,
+  RotateCcw, Landmark, ArrowDown, ArrowUp, ArrowLeftRight,
 } from 'lucide-react';
 import { formatCurrency, formatDateTime, isToday } from '@/lib/taxCalc';
+import EmployeeVerificationDialog from '@/components/features/EmployeeVerificationDialog';
+import type { Employee } from '@/types';
 
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const { employee, store } = useAuthStore();
   const pos = usePosStore();
+  const [pinOpen, setPinOpen] = useState(false);
+
+  const handleBuyTradeVerified = (verified: Employee) => {
+    pos.setActingEmployeeId(verified.id);
+    navigate('/pos/customer?from=buy-trade');
+  };
 
   const stats = useMemo(() => {
     const todaySales = pos.sales.filter((s) => s.status === 'completed' && isToday(s.completedAt || s.createdAt));
@@ -69,13 +80,25 @@ export default function DashboardPage() {
   return (
     <div className="space-y-5">
       {/* Welcome */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Welcome back, {employee?.fullName.split(' ')[0]}</h1>
           <p className="text-sm text-muted-foreground">{store?.name} · {new Date().toLocaleDateString('en-CA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
         </div>
-        <Badge variant="outline" className="text-[11px] font-mono capitalize">{employee?.role}</Badge>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button className="h-11 px-5 text-[14px] font-semibold" onClick={() => setPinOpen(true)}>
+            <ArrowLeftRight className="size-4 mr-2" />
+            Buy / Trade
+          </Button>
+          <Badge variant="outline" className="text-[11px] font-mono capitalize">{employee?.role}</Badge>
+        </div>
       </div>
+
+      <EmployeeVerificationDialog
+        open={pinOpen}
+        onOpenChange={setPinOpen}
+        onVerified={handleBuyTradeVerified}
+      />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-4 gap-4">

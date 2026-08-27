@@ -91,11 +91,15 @@ function validateCustomerData(data: {
 type Step = 'search' | 'customer-form' | 'devices' | 'payment' | 'complete';
 
 export default function CustomerVisitPage() {
-  const { employee, store } = useAuthStore();
+  const { employee, store, getEmployeeById } = useAuthStore();
   const pos = usePosStore();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const preselectHandled = useRef(false);
+  const fromBuyTrade = searchParams.get('from') === 'buy-trade';
+  const actingEmployee = (fromBuyTrade && pos.actingEmployeeId
+    ? getEmployeeById(pos.actingEmployeeId)
+    : undefined) || employee;
 
   // Wizard state
   const [step, setStep] = useState<Step>('search');
@@ -270,12 +274,12 @@ export default function CustomerVisitPage() {
   };
 
   const startVisitForCustomer = (customer: Customer) => {
-    if (!employee || !store) return;
-    const vId = pos.createVisit(customer.id, employee.id, store.id, 'buy', '');
+    if (!actingEmployee || !store) return;
+    const vId = pos.createVisit(customer.id, actingEmployee.id, store.id, 'buy', '');
     setVisitId(vId);
-    const pId = pos.createPurchase(vId, customer.id, employee.id, store.id);
+    const pId = pos.createPurchase(vId, customer.id, actingEmployee.id, store.id);
     setPurchaseId(pId);
-    pos.logAction(employee.id, employee.fullName, 'Customer', 'VISIT_START', 'visit', vId,
+    pos.logAction(actingEmployee.id, actingEmployee.fullName, 'Customer', 'VISIT_START', 'visit', vId,
       `Started visit for ${customer.firstName} ${customer.lastName} — Customer wants to sell`);
     setStep('devices');
     toast({ title: 'Visit started', description: `Now add the devices ${customer.firstName} wants to sell` });
@@ -376,18 +380,18 @@ export default function CustomerVisitPage() {
   };
 
   const handleCompletePurchase = () => {
-    if (!purchaseId || !employee || !store) return;
+    if (!purchaseId || !actingEmployee || !store) return;
     if (remaining > 0.01) {
       toast({ variant: 'destructive', title: 'Payment incomplete', description: `Still owed: ${formatCurrency(remaining)}` });
       return;
     }
-    pos.completePurchase(purchaseId, employee.fullName, store.id);
+    pos.completePurchase(purchaseId, actingEmployee.fullName, store.id);
     setStep('complete');
     toast({ title: 'Purchase completed!' });
   };
 
   const handlePrintLabel = () => {
-    if (!visitId || !employee) return;
+    if (!visitId || !actingEmployee) return;
     setShowLabelDialog(true);
   };
 
@@ -403,14 +407,14 @@ export default function CustomerVisitPage() {
   };
 
   const handleReprintConfirm = () => {
-    if (!reprintVisit || !employee) return;
-    pos.printLabel(reprintVisit.id, employee.id);
+    if (!reprintVisit || !actingEmployee) return;
+    pos.printLabel(reprintVisit.id, actingEmployee.id);
     toast({ title: 'Book label printed', description: `Visit ${reprintVisit.visitCode}` });
   };
 
   const handleConfirmPrint = () => {
-    if (!visitId || !employee) return;
-    pos.printLabel(visitId, employee.id);
+    if (!visitId || !actingEmployee) return;
+    pos.printLabel(visitId, actingEmployee.id);
     toast({ title: 'Book label printed', description: `Visit ${visitId}` });
   };
 
@@ -455,16 +459,23 @@ export default function CustomerVisitPage() {
                 </div>
               );
             })}
-            {selectedCustomer && step !== 'search' && step !== 'customer-form' && (
-              <div className="ml-auto flex items-center gap-2 text-[11px]">
-                <Badge variant="outline" className="text-[9px] font-mono">{selectedCustomer.customerCode}</Badge>
-                <span className="font-semibold text-foreground">{selectedCustomer.firstName} {selectedCustomer.lastName}</span>
-                <span className="text-muted-foreground">· {selectedCustomer.phone}</span>
-                {selectedCustomer.notes && (
-                  <span className="text-amber-600 text-[10px] max-w-[200px] truncate">Note: {selectedCustomer.notes}</span>
-                )}
-              </div>
-            )}
+            <div className="ml-auto flex items-center gap-2 text-[11px]">
+              {actingEmployee && (
+                <Badge variant="outline" className="text-[9px]">
+                  Employee: {actingEmployee.fullName}
+                </Badge>
+              )}
+              {selectedCustomer && step !== 'search' && step !== 'customer-form' && (
+                <>
+                  <Badge variant="outline" className="text-[9px] font-mono">{selectedCustomer.customerCode}</Badge>
+                  <span className="font-semibold text-foreground">{selectedCustomer.firstName} {selectedCustomer.lastName}</span>
+                  <span className="text-muted-foreground">· {selectedCustomer.phone}</span>
+                  {selectedCustomer.notes && (
+                    <span className="text-amber-600 text-[10px] max-w-[200px] truncate">Note: {selectedCustomer.notes}</span>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -876,7 +887,7 @@ export default function CustomerVisitPage() {
                 customer={selectedCustomer}
                 currentVisitId={visitId}
                 onPrintLabel={(vId) => {
-                  if (employee) pos.printLabel(vId, employee.id);
+                  if (actingEmployee) pos.printLabel(vId, actingEmployee.id);
                   toast({ title: 'Book label printed' });
                 }}
               />

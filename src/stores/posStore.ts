@@ -43,9 +43,12 @@ interface PosState {
   auditLog: AuditLogEntry[];
   labels: LabelPrintLog[];
   nextVisitNumber: number;
+  /** In-memory only. Employee verified for the current Buy / Trade visit (not a PIN). */
+  actingEmployeeId: string | null;
 
   // Init
   loadStoreData: (storeId: string) => Promise<void>;
+  setActingEmployeeId: (id: string | null) => void;
 
   // Customer
   addCustomer: (data: Omit<Customer, 'id' | 'customerCode' | 'createdAt' | 'updatedAt'>) => string;
@@ -162,6 +165,9 @@ export const usePosStore = create<PosState>()(
     auditLog: [],
     labels: [],
     nextVisitNumber: PROD_SETTINGS.nextVisitNumber,
+    actingEmployeeId: null,
+
+    setActingEmployeeId: (id) => set({ actingEmployeeId: id }),
 
     // ── Load all store data from DB ──
     loadStoreData: async (storeId: string) => {
@@ -855,6 +861,7 @@ export const usePosStore = create<PosState>()(
         cashDrawer: emptyDrawer, auditLog: [], labels: [],
         isLoaded: false,
         loadError: null,
+        actingEmployeeId: null,
       });
     },
   })
