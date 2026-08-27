@@ -139,9 +139,9 @@ export interface InventoryItem {
   soldAt: string | null;
   notes: string;
   // ── Storage Location ──
-  storageLocation: string | null;   // full code e.g. 'R1-R5' or 'R2-SR10'
-  storageRack: string | null;       // e.g. 'R1', 'R2'
-  storageRow: string | null;        // e.g. 'R5', 'SR10'
+  storageLocation: string | null;   // full code e.g. 'R1-R5' or 'R7-R1'
+  storageRack: string | null;       // e.g. 'R1'..'R9'
+  storageRow: string | null;        // e.g. 'R5', 'SR10', 'B2'
   // ── Label Tracking ──
   labelGenerated: boolean;
   labelGeneratedAt: string | null;

@@ -16,7 +16,7 @@ interface LocationAssignmentDialogProps {
   onSave: (location: string, rack: string, row: string, notes: string) => void;
 }
 
-const RACKS = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'];
+const RACKS = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9'];
 const ROW_TYPES = [
   { value: 'R', label: 'Row (R)', desc: 'Standard pickable row' },
   { value: 'B', label: 'Bin (B)', desc: 'Storage bin' },
@@ -121,7 +121,7 @@ export default function LocationAssignmentDialog({
                       : 'border-border bg-secondary/30 text-foreground hover:border-primary/40'
                   }`}
                 >
-                  {r}
+                  Rack {r.slice(1)}
                 </button>
               ))}
             </div>
@@ -165,7 +165,7 @@ export default function LocationAssignmentDialog({
             <p className="text-[9px] text-muted-foreground uppercase font-semibold tracking-wider mb-1">Location Code</p>
             <p className="text-2xl font-bold font-mono tabular-nums text-primary leading-none">{locationCode}</p>
             <p className="text-[10px] text-muted-foreground mt-1.5">
-              Rack {rack} · {rowType === 'B' ? `Bin ${rowNumber}` : `Row ${rowNumber}`}
+              Rack {rack.slice(1)} · {rowType === 'B' ? `Bin ${rowNumber}` : `Row ${rowNumber}`}
             </p>
           </div>
 
