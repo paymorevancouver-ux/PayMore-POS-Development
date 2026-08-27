@@ -41,7 +41,16 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     label: 'Transactions',
     items: [
       { path: '/pos/inventory', label: 'Inventory', icon: Package, module: 'inventory' },
-      { path: '/pos/sales', label: 'Sales', icon: ShoppingCart, module: 'sales' },
+      {
+        path: '/pos/sales',
+        label: 'Sales',
+        icon: ShoppingCart,
+        module: 'sales',
+        children: [
+          { path: '/pos/sales', label: 'New Sale' },
+          { path: '/pos/sales/history', label: 'Sales History' },
+        ],
+      },
       { path: '/pos/returns', label: 'Returns', icon: RotateCcw, module: 'returns' },
     ],
   },
@@ -113,10 +122,8 @@ export default function Sidebar() {
             <p className="text-[9px] font-semibold text-sidebar-foreground/50 uppercase tracking-widest px-3 mb-1">{section.label}</p>
             <div className="space-y-0.5">
               {visibleItems.map((item) => {
-                const inCustomers = location.pathname === '/pos/customers'
-                  || location.pathname.startsWith('/pos/customers/');
                 const parentActive = item.children
-                  ? inCustomers
+                  ? location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
                   : location.pathname === item.path;
                 const Icon = item.icon;
                 return (
@@ -137,10 +144,14 @@ export default function Sidebar() {
                     {item.children && (
                       <div className="mt-0.5 ml-3 pl-3 border-l border-white/10 space-y-0.5">
                         {item.children.map((child) => {
-                          const childActive = child.path === '/pos/customers/visits'
-                            ? location.pathname === '/pos/customers/visits'
-                            : location.pathname === '/pos/customers'
-                              || (location.pathname.startsWith('/pos/customers/') && location.pathname !== '/pos/customers/visits');
+                          const siblingMatch = item.children!.some((other) => (
+                            other.path !== child.path && (
+                              location.pathname === other.path
+                              || location.pathname.startsWith(`${other.path}/`)
+                            )
+                          ));
+                          const childActive = location.pathname === child.path
+                            || (!siblingMatch && location.pathname.startsWith(`${child.path}/`));
                           return (
                             <button
                               key={child.path}

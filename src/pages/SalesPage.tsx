@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { usePosStore } from '@/stores/posStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
@@ -9,14 +10,16 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Search, Plus, ShoppingCart, Trash2, Receipt, DollarSign, X, Printer, History } from 'lucide-react';
-import { formatCurrency, formatDateTime, round2 } from '@/lib/taxCalc';
+import { Search, Plus, ShoppingCart, Trash2, Receipt, X, History } from 'lucide-react';
+import { formatCurrency, round2 } from '@/lib/taxCalc';
 import { validateSaleQuantity } from '@/lib/inventorySale';
 import { TAX_MODES, PAYMENT_METHODS } from '@/constants/config';
 import SalesInvoiceDialog from '@/components/features/SalesInvoiceDialog';
+import SalesSectionNav from '@/components/features/SalesSectionNav';
 import type { TaxMode, PaymentMethod, SaleTransaction } from '@/types';
 
 export default function SalesPage() {
+  const navigate = useNavigate();
   const { employee, store } = useAuthStore();
   const pos = usePosStore();
   const { toast } = useToast();
@@ -34,10 +37,6 @@ export default function SalesPage() {
   // Invoice dialog state
   const [showInvoice, setShowInvoice] = useState(false);
   const [invoiceSale, setInvoiceSale] = useState<SaleTransaction | null>(null);
-
-  // Reprint history
-  const [showHistory, setShowHistory] = useState(false);
-  const [historySearch, setHistorySearch] = useState('');
   const [completing, setCompleting] = useState(false);
 
   const activeSale = pos.sales.find((s) => s.id === activeSaleId && s.status === 'draft');
@@ -50,23 +49,6 @@ export default function SalesPage() {
   const invoiceSaleItems = useMemo(() => invoiceSale ? pos.saleItems.filter((i) => i.salesTransactionId === invoiceSale.id) : [], [pos.saleItems, invoiceSale]);
   const invoiceSalePayments = useMemo(() => invoiceSale ? pos.salePayments.filter((p) => p.transactionId === invoiceSale.id) : [], [pos.salePayments, invoiceSale]);
   const invoiceCustomer = invoiceSale?.customerId ? pos.customers.find((c) => c.id === invoiceSale.customerId) : null;
-
-  // Completed sales for reprint (most recent first)
-  const completedSales = useMemo(() => {
-    let sales = pos.sales.filter((s) => s.status === 'completed');
-    if (historySearch.trim()) {
-      const q = historySearch.toLowerCase();
-      sales = sales.filter((s) => {
-        const cust = s.customerId ? pos.customers.find((c) => c.id === s.customerId) : null;
-        return s.saleCode.toLowerCase().includes(q) ||
-          s.id.toLowerCase().includes(q) ||
-          (cust && `${cust.firstName} ${cust.lastName}`.toLowerCase().includes(q));
-      });
-    }
-    return sales
-      .sort((a, b) => new Date(b.completedAt || b.createdAt).getTime() - new Date(a.completedAt || a.createdAt).getTime())
-      .slice(0, 20);
-  }, [pos.sales, pos.customers, historySearch]);
 
   const availableInv = useMemo(() => {
     const items = pos.inventory.filter((i) => i.status === 'listed' && i.quantityOnHand > 0);
@@ -173,12 +155,6 @@ export default function SalesPage() {
     toast({ title: 'Sale voided' });
   };
 
-  const handleReprintInvoice = (sale: SaleTransaction) => {
-    setInvoiceSale(sale);
-    setShowInvoice(true);
-    setShowHistory(false);
-  };
-
   const handleInvoicePrint = () => {
     if (invoiceSale && employee) {
       pos.logAction(employee.id, employee.fullName, 'Sales', 'INVOICE_PRINT', 'sale', invoiceSale.id,
@@ -187,18 +163,18 @@ export default function SalesPage() {
   };
 
   return (
-    <div className="grid grid-cols-12 gap-5 h-[calc(100vh-112px)]">
+    <div className="flex flex-col gap-3 h-[calc(100vh-112px)]">
+      <SalesSectionNav />
+      <div className="grid grid-cols-12 gap-5 flex-1 min-h-0">
       {/* Left: Inventory search */}
       <div className="col-span-4 flex flex-col gap-4 min-h-0">
         <Card className="flex-1 flex flex-col min-h-0">
           <CardHeader className="pb-2 shrink-0">
             <div className="flex items-center justify-between">
               <CardTitle className="text-[14px]">Available Products</CardTitle>
-              <div className="flex items-center gap-1">
-                <Button size="sm" variant="ghost" className="h-7 text-[10px]" onClick={() => setShowHistory(true)}>
-                  <History className="size-3 mr-1" />Reprint
-                </Button>
-              </div>
+              <Button size="sm" variant="ghost" className="h-7 text-[10px]" onClick={() => navigate('/pos/sales/history')}>
+                <History className="size-3 mr-1" />Sales History
+              </Button>
             </div>
             <div className="relative mt-2">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -373,6 +349,7 @@ export default function SalesPage() {
           </>
         )}
       </div>
+      </div>
 
       {/* Non-inventory dialog */}
       <Dialog open={showNonInv} onOpenChange={setShowNonInv}>
@@ -406,61 +383,6 @@ export default function SalesPage() {
         customer={invoiceCustomer}
         onPrint={handleInvoicePrint}
       />
-
-      {/* Reprint History Dialog */}
-      <Dialog open={showHistory} onOpenChange={setShowHistory}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle className="text-[15px] flex items-center gap-2">
-              <History className="size-5 text-primary" />
-              Reprint Sales Invoice
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 mt-1">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-              <Input placeholder="Search by sale code, ID, or customer name…" value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)} className="pl-9 h-9 text-[12px]" />
-            </div>
-            <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
-              {completedSales.map((sale) => {
-                const cust = sale.customerId ? pos.customers.find((c) => c.id === sale.customerId) : null;
-                const itemCount = pos.saleItems.filter((i) => i.salesTransactionId === sale.id).length;
-                const payments = pos.salePayments.filter((p) => p.transactionId === sale.id);
-                const payMethods = [...new Set(payments.map((p) => p.method))].join(', ');
-                return (
-                  <div key={sale.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border hover:border-primary/20 hover:bg-primary/[0.02] transition-all">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] font-semibold text-primary">{sale.saleCode}</span>
-                        <Badge variant="outline" className="text-[8px] capitalize">{payMethods}</Badge>
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-                        <span className="font-medium text-foreground">{cust ? `${cust.firstName} ${cust.lastName}` : 'Walk-in'}</span>
-                        <span>·</span>
-                        <span>{itemCount} item{itemCount !== 1 ? 's' : ''}</span>
-                        <span>·</span>
-                        <span className="font-mono font-semibold text-foreground">{formatCurrency(sale.totalAmount)}</span>
-                        <span>·</span>
-                        <span>{formatDateTime(sale.completedAt || sale.createdAt)}</span>
-                      </div>
-                    </div>
-                    <Button size="sm" variant="outline" className="h-7 text-[10px] shrink-0 ml-3"
-                      onClick={() => handleReprintInvoice(sale)}>
-                      <Printer className="size-3 mr-1" />Reprint
-                    </Button>
-                  </div>
-                );
-              })}
-              {completedSales.length === 0 && (
-                <div className="text-center py-8">
-                  <p className="text-[11px] text-muted-foreground">No completed sales found</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { usePosStore } from '@/stores/posStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
@@ -60,6 +61,8 @@ export default function ReturnsPage() {
   const { employee, store } = useAuthStore();
   const pos = usePosStore();
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const preselectHandled = useRef(false);
 
   const [activeTab, setActiveTab] = useState('process');
 
@@ -164,6 +167,49 @@ export default function ReturnsPage() {
     }] : []);
     setStep('select');
   };
+
+  useEffect(() => {
+    const saleId = searchParams.get('saleId');
+    if (!saleId || preselectHandled.current) return;
+    const sale = pos.sales.find((s) => s.id === saleId);
+    if (!sale) return;
+    preselectHandled.current = true;
+    setSearchParams({}, { replace: true });
+    if (sale.status === 'voided' || sale.status === 'draft') {
+      toast({ variant: 'destructive', title: 'This sale cannot be returned.' });
+      return;
+    }
+    const items = pos.saleItems.filter((i) => i.salesTransactionId === sale.id);
+    const firstEligible = items.find((item) => getReturnEligibility(item, pos.returns).quantityEligible > 0);
+    if (!firstEligible) {
+      toast({ variant: 'destructive', title: 'No returnable items on this sale.' });
+      return;
+    }
+    const elig = getReturnEligibility(firstEligible, pos.returns);
+    const cust = sale.customerId ? pos.customers.find((c) => c.id === sale.customerId) : null;
+    handleSelectSearchResult({
+      saleId: sale.id,
+      saleItemId: firstEligible.id,
+      saleCode: sale.saleCode,
+      productName: `${firstEligible.brand} ${firstEligible.model}`,
+      brand: firstEligible.brand,
+      model: firstEligible.model,
+      category: firstEligible.category,
+      quantitySold: firstEligible.quantity,
+      quantityReturned: elig.quantityReturned,
+      quantityEligible: elig.quantityEligible,
+      customerName: cust ? `${cust.firstName} ${cust.lastName}` : 'Walk-in',
+      customerPhone: cust?.phone ?? '',
+      customerEmail: cust?.email ?? '',
+      saleDate: sale.completedAt || sale.createdAt,
+      deviceCode: firstEligible.inventoryItemId
+        ? (pos.inventory.find((i) => i.id === firstEligible.inventoryItemId)?.deviceCode ?? '')
+        : '',
+      serialImei: firstEligible.serialImei,
+      searchText: '',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, pos.sales, pos.saleItems, pos.returns]);
 
   const toggleItem = (item: SaleItem) => {
     const { quantityEligible } = getItemEligibility(item);

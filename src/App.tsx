@@ -17,6 +17,7 @@ import CashDrawerPage from '@/pages/CashDrawerPage';
 import InventoryPage from '@/pages/InventoryPage';
 import LabelGeneratorPage from '@/pages/LabelGeneratorPage';
 import SalesPage from '@/pages/SalesPage';
+import SalesHistoryPage from '@/pages/SalesHistoryPage';
 import ReturnsPage from '@/pages/ReturnsPage';
 import PaymentChangesPage from '@/pages/PaymentChangesPage';
 import PurchaseChangesPage from '@/pages/PurchaseChangesPage';
@@ -118,6 +119,7 @@ export default function App() {
           <Route path="inventory" element={<ProtectedRoute requiredModule="inventory"><InventoryPage /></ProtectedRoute>} />
           <Route path="labels" element={<ProtectedRoute requiredModule="labels"><LabelGeneratorPage /></ProtectedRoute>} />
           <Route path="sales" element={<ProtectedRoute requiredModule="sales"><SalesPage /></ProtectedRoute>} />
+          <Route path="sales/history" element={<ProtectedRoute requiredModule="sales"><SalesHistoryPage /></ProtectedRoute>} />
           <Route path="returns" element={<ProtectedRoute requiredModule="returns"><ReturnsPage /></ProtectedRoute>} />
           <Route path="payment-changes" element={<ProtectedRoute requiredModule="payment-changes"><PaymentChangesPage /></ProtectedRoute>} />
           <Route path="purchase-changes" element={<ProtectedRoute requiredModule="purchase-changes"><PurchaseChangesPage /></ProtectedRoute>} />
