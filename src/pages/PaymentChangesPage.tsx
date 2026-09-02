@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { Search, ArrowRightLeft, CheckCircle, Plus, X, History, Receipt, DollarSign, ShoppingBag } from 'lucide-react';
 import { formatCurrency, formatDateTime, round2 } from '@/lib/taxCalc';
+import { getPaymentsForTransaction } from '@/lib/paymentChange';
 import { PAYMENT_METHODS } from '@/constants/config';
 import type { PaymentMethod, SaleTransaction, PurchaseTransaction, TransactionPayment } from '@/types';
 
@@ -38,11 +39,27 @@ export default function PaymentChangesPage() {
   // Get original payments for the selected transaction
   const originalPayments = useMemo(() => {
     if (!selectedTx) return [];
-    if (selectedTxType === 'sale') {
-      return pos.salePayments.filter((p) => p.transactionId === selectedTx.id);
-    }
-    return pos.purchasePayments.filter((p) => p.transactionId === selectedTx.id);
+    return getPaymentsForTransaction(
+      pos.salePayments,
+      pos.purchasePayments,
+      selectedTxType,
+      selectedTx.id,
+    );
   }, [selectedTx, selectedTxType, pos.salePayments, pos.purchasePayments]);
+
+  const resetTransactionForm = () => {
+    setNewPayments([]);
+    setNewMethod('cash');
+    setNewAmount(0);
+    setNewRef('');
+    setReason('');
+  };
+
+  const resetAllSelection = () => {
+    setSelectedTx(null);
+    setSearchQuery('');
+    resetTransactionForm();
+  };
 
   const txTotal = selectedTx ? ('totalAmount' in selectedTx ? selectedTx.totalAmount : 0) : 0;
   const newTotal = round2(newPayments.reduce((s, p) => s + p.amount, 0));
@@ -89,17 +106,15 @@ export default function PaymentChangesPage() {
   }, [pos.paymentChanges]);
 
   const handleSelectSale = (sale: SaleTransaction) => {
+    resetTransactionForm();
     setSelectedTx(sale);
     setSelectedTxType('sale');
-    setNewPayments([]);
-    setReason('');
   };
 
   const handleSelectPurchase = (purchase: PurchaseTransaction) => {
+    resetTransactionForm();
     setSelectedTx(purchase);
     setSelectedTxType('purchase');
-    setNewPayments([]);
-    setReason('');
   };
 
   const handleAddNewPayment = () => {
@@ -118,6 +133,13 @@ export default function PaymentChangesPage() {
     if (!selectedTx || !employee || !store || !reason.trim()) {
       toast({ variant: 'destructive', title: 'Enter a reason for this change' }); return;
     }
+    if (originalPayments.length === 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Payment record for this transaction could not be found. No changes were made.',
+      });
+      return;
+    }
     if (Math.abs(newTotal - txTotal) > 0.01) {
       toast({ variant: 'destructive', title: 'Payment total must match transaction total', description: `Expected ${formatCurrency(txTotal)}, got ${formatCurrency(newTotal)}` }); return;
     }
@@ -131,7 +153,7 @@ export default function PaymentChangesPage() {
       lineNumber: i + 1, method: p.method, amount: p.amount, reference: p.reference, createdAt: new Date().toISOString(),
     }));
 
-    pos.createPaymentChange({
+    const changeId = pos.createPaymentChange({
       transactionType: selectedTxType,
       transactionId: selectedTx.id,
       transactionRef: txRef,
@@ -151,20 +173,14 @@ export default function PaymentChangesPage() {
       newPayments.forEach((p) => pos.addPurchasePayment(selectedTx.id, p.method, p.amount, p.reference));
     }
 
-    const changeId = pos.paymentChanges[0]?.id;
-    if (changeId) pos.completePaymentChange(changeId, employee.fullName);
+    pos.completePaymentChange(changeId, employee.fullName);
 
     toast({ title: 'Payment change completed' });
-    setSelectedTx(null);
-    setSearchQuery('');
-    setNewPayments([]);
-    setReason('');
+    resetAllSelection();
   };
 
   const handleClear = () => {
-    setSelectedTx(null);
-    setNewPayments([]);
-    setReason('');
+    resetAllSelection();
   };
 
   return (
@@ -192,11 +208,11 @@ export default function PaymentChangesPage() {
                   {/* Type toggle */}
                   <div className="flex gap-2 mb-3">
                     <Button size="sm" variant={txType === 'sale' ? 'default' : 'outline'} className="flex-1 h-8 text-[11px]"
-                      onClick={() => { setTxType('sale'); setSelectedTx(null); setSearchQuery(''); }}>
+                      onClick={() => { setTxType('sale'); resetAllSelection(); }}>
                       <Receipt className="size-3 mr-1" />Sales
                     </Button>
                     <Button size="sm" variant={txType === 'purchase' ? 'default' : 'outline'} className="flex-1 h-8 text-[11px]"
-                      onClick={() => { setTxType('purchase'); setSelectedTx(null); setSearchQuery(''); }}>
+                      onClick={() => { setTxType('purchase'); resetAllSelection(); }}>
                       <ShoppingBag className="size-3 mr-1" />Purchases
                     </Button>
                   </div>

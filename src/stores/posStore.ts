@@ -18,6 +18,10 @@ import { useEbayStore } from '@/stores/ebayStore';
 import { PROD_SETTINGS } from '@/constants/migrationData';
 import { STORE_ID } from '@/constants/mockData';
 import { applyInventoryReturn, applyInventorySaleDeduction, validateSaleQuantity } from '@/lib/inventorySale';
+import {
+  calculatePaymentChangeDrawerDelta,
+  validatePaymentChangeRecord,
+} from '@/lib/paymentChange';
 
 const ACTING_EMPLOYEE_KEY = 'pm-acting-employee-id';
 
@@ -727,24 +731,38 @@ export const usePosStore = create<PosState>()(
     completePaymentChange: (changeId, employeeName) => {
       const state = get();
       const pc = state.paymentChanges.find((p) => p.id === changeId);
-      if (!pc) return;
+      if (!pc) {
+        console.error(`[POS] Payment change not found: ${changeId}`);
+        return;
+      }
+
+      const validationError = validatePaymentChangeRecord(pc);
+      if (validationError) {
+        console.error(`[POS] Cannot complete payment change ${changeId}: ${validationError}`);
+        return;
+      }
+
       const completedAt = new Date().toISOString();
       set((s) => ({ paymentChanges: s.paymentChanges.map((p) => p.id === changeId ? { ...p, status: 'completed' as const, completedAt } : p) }));
       db.updatePaymentChange(changeId, { status: 'completed', completedAt });
 
-      // Cash drawer — calculate cash delta between old and new payments
-      const oldCash = pc.oldPaymentJson.filter((p) => p.method === 'cash').reduce((s2, p) => s2 + p.amount, 0);
-      const newCash = pc.newPaymentJson.filter((p) => p.method === 'cash').reduce((s2, p) => s2 + p.amount, 0);
-      const rawDelta = round2(newCash - oldCash);
-
-      // For sales: more cash = more money IN to drawer (positive delta)
-      // For purchases: more cash = more money OUT of drawer (negative delta)
-      // Purchases are payouts, so if cash increased, drawer DECREASES
-      const drawerDelta = pc.transactionType === 'purchase' ? -rawDelta : rawDelta;
+      const drawerDelta = calculatePaymentChangeDrawerDelta(
+        pc.transactionType,
+        pc.oldPaymentJson,
+        pc.newPaymentJson,
+      );
 
       if (drawerDelta !== 0) {
         const direction = drawerDelta > 0 ? 'Cash in' : 'Cash out';
-        get().addDrawerEntry('adjustment', drawerDelta, `Payment change for ${pc.transactionRef} — ${direction} $${Math.abs(drawerDelta).toFixed(2)}`, pc.changedByEmployeeId, pc.storeId, 'payment-change', changeId);
+        get().addDrawerEntry(
+          'adjustment',
+          drawerDelta,
+          `Payment change for ${pc.transactionRef} — ${direction} $${Math.abs(drawerDelta).toFixed(2)}`,
+          pc.changedByEmployeeId,
+          pc.storeId,
+          'payment-change',
+          changeId,
+        );
       }
 
       get().logAction(pc.changedByEmployeeId, employeeName, 'Payment Changes', 'PAYMENT_CHANGE', 'payment-change', changeId,
