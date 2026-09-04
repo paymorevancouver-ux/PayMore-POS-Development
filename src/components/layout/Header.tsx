@@ -10,6 +10,7 @@ const TITLES: Record<string, string> = {
   '/pos/customers/visits': 'Customer Visit History',
   '/pos/drawer': 'Cash Drawer',
   '/pos/inventory': 'Inventory Management',
+  '/pos/shopify-lister': 'Shopify Auto Lister',
   '/pos/sales': 'New Sale',
   '/pos/sales/history': 'Sales History',
   '/pos/returns': 'Returns',
@@ -31,6 +32,7 @@ export default function Header() {
   }, []);
 
   const title = TITLES[location.pathname]
+    || (location.pathname.startsWith('/pos/shopify-lister/') ? 'Shopify Listing Draft' : null)
     || (location.pathname.startsWith('/pos/customers/') ? 'Customers' : 'Paymore POS');
 
   return (

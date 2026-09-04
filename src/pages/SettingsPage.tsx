@@ -12,6 +12,9 @@ import { Settings, RefreshCw, Key, Shield, Clock, Store, Database, Loader2 } fro
 import { STORES } from '@/constants/mockData';
 import { supabase } from '@/lib/supabase';
 import { useEffect } from 'react';
+import { db } from '@/lib/database';
+import { HOLDING_PERIOD_SETTING_KEY, parseHoldingPeriodDays } from '@/lib/holdingPeriod';
+import { useShopifyListerStore } from '@/stores/shopifyListerStore';
 
 export default function SettingsPage() {
   const { employee, store, changeOwnPin, sessionTimeoutMinutes, setSessionTimeout } = useAuthStore();
@@ -24,18 +27,24 @@ export default function SettingsPage() {
   const [confirmPin, setConfirmPin] = useState('');
 
   const [timeoutValue, setTimeoutValue] = useState(String(sessionTimeoutMinutes));
+  const [holdingDays, setHoldingDays] = useState('0');
   const [storeDataCounts, setStoreDataCounts] = useState<Record<string, Record<string, number>>>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
 
   useEffect(() => {
     loadStoreDataCounts();
-  }, []);
+    if (store?.id) {
+      void db.getSetting(store.id, HOLDING_PERIOD_SETTING_KEY).then((value) => {
+        setHoldingDays(String(parseHoldingPeriodDays(value)));
+      });
+    }
+  }, [store?.id]);
 
   const loadStoreDataCounts = async () => {
     setLoadingCounts(true);
     const tables = [
       'pos_customers', 'pos_employees', 'pos_visits', 'pos_purchases',
-      'pos_inventory', 'pos_sales', 'pos_returns', 'pos_cash_drawer_entries',
+      'pos_inventory', 'pos_shopify_listings', 'pos_sales', 'pos_returns', 'pos_cash_drawer_entries',
       'pos_audit_log'
     ];
     const counts: Record<string, Record<string, number>> = {};
@@ -83,6 +92,19 @@ export default function SettingsPage() {
     }
     setSessionTimeout(mins);
     toast({ title: `Session timeout set to ${mins} minutes` });
+  };
+
+  const handleHoldingSave = async () => {
+    const days = parseHoldingPeriodDays(holdingDays);
+    if (!store?.id) return;
+    if (days < 0 || days > 365) {
+      toast({ variant: 'destructive', title: 'Holding period must be between 0 and 365 days' });
+      return;
+    }
+    await db.setSetting(store.id, HOLDING_PERIOD_SETTING_KEY, String(days));
+    setHoldingDays(String(days));
+    useShopifyListerStore.setState({ holdingPeriodDays: days });
+    toast({ title: `Holding period set to ${days} day${days === 1 ? '' : 's'}` });
   };
 
   const handleReset = () => {
@@ -157,6 +179,37 @@ export default function SettingsPage() {
               />
               <span className="text-[11px] text-muted-foreground">min</span>
               <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={handleTimeoutSave}>
+                Save
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <Clock className="size-4 text-primary" />
+            <CardTitle className="text-[14px]">Inventory Holding Period</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] font-medium">Days before listing</p>
+              <p className="text-[11px] text-muted-foreground">Used by Shopify Auto Lister. Stored as pos_settings.holding_period_days.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                value={holdingDays}
+                onChange={(e) => setHoldingDays(e.target.value)}
+                className="w-20 h-8 text-[11px] font-mono text-right"
+                min={0}
+                max={365}
+              />
+              <span className="text-[11px] text-muted-foreground">days</span>
+              <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => void handleHoldingSave()}>
                 Save
               </Button>
             </div>

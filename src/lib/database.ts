@@ -11,6 +11,7 @@ import type {
   Return, PaymentChange, PurchaseChange, CashDrawerEntry,
   AuditLogEntry, LabelPrintLog, Employee, LocationHistoryEntry,
 } from '@/types';
+import type { ShopifyAccessory, ShopifyListing, ShopifyListingStatus, ShopifyTestResult } from '@/types/shopify';
 
 // ── Generic helpers ──
 
@@ -258,6 +259,92 @@ function mapLabel(r: Record<string, unknown>): LabelPrintLog {
     id: r.id as string, visitId: r.visit_id as string,
     printedByEmployeeId: r.printed_by_employee_id as string,
     printedAt: r.printed_at as string, printCount: Number(r.print_count),
+  };
+}
+
+function mapShopifyListing(r: Record<string, unknown>): ShopifyListing {
+  return {
+    id: r.id as string,
+    storeId: r.store_id as string,
+    inventoryItemId: r.inventory_item_id as string,
+    status: r.status as ShopifyListingStatus,
+    title: (r.title as string) || '',
+    description: (r.description as string) || '',
+    price: Number(r.price) || 0,
+    compareAtPrice: r.compare_at_price == null ? null : Number(r.compare_at_price),
+    quantity: Number(r.quantity) || 0,
+    condition: (r.condition as string) || '',
+    shopifyVendor: (r.shopify_vendor as string) || '',
+    shopifyProductType: (r.shopify_product_type as string) || '',
+    sku: (r.sku as string) || '',
+    barcode: (r.barcode as string) || '',
+    tags: Array.isArray(r.tags) ? r.tags as string[] : [],
+    photos: Array.isArray(r.photos) ? r.photos as string[] : [],
+    attributes: (r.attributes as Record<string, unknown>) || {},
+    accessories: Array.isArray(r.accessories) ? r.accessories as ShopifyAccessory[] : [],
+    testingResults: (r.testing_results as Record<string, ShopifyTestResult>) || {},
+    staffNotes: (r.staff_notes as string) || '',
+    shopifyProductId: (r.shopify_product_id as string) || null,
+    shopifyVariantId: (r.shopify_variant_id as string) || null,
+    shopifyInventoryItemId: (r.shopify_inventory_item_id as string) || null,
+    shopifyHandle: (r.shopify_handle as string) || null,
+    shopifyUrl: (r.shopify_url as string) || null,
+    shopifyAdminUrl: (r.shopify_admin_url as string) || null,
+    shopifyStorefrontUrl: (r.shopify_storefront_url as string) || null,
+    publishAttempts: Number(r.publish_attempts) || 0,
+    lastPublishAttemptAt: (r.last_publish_attempt_at as string) || null,
+    publishWarning: (r.publish_warning as string) || null,
+    shopifyLocationId: (r.shopify_location_id as string) || null,
+    lastError: (r.last_error as string) || null,
+    createdByEmployeeId: (r.created_by_employee_id as string) || null,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+    publishedAt: (r.published_at as string) || null,
+    lastSyncedAt: (r.last_synced_at as string) || null,
+    endedAt: (r.ended_at as string) || null,
+  };
+}
+
+function shopifyListingRow(listing: ShopifyListing): Record<string, unknown> {
+  return {
+    id: listing.id,
+    store_id: listing.storeId,
+    inventory_item_id: listing.inventoryItemId,
+    status: listing.status,
+    title: listing.title,
+    description: listing.description,
+    price: listing.price,
+    compare_at_price: listing.compareAtPrice,
+    quantity: listing.quantity,
+    condition: listing.condition,
+    shopify_vendor: listing.shopifyVendor,
+    shopify_product_type: listing.shopifyProductType,
+    sku: listing.sku,
+    barcode: listing.barcode,
+    tags: listing.tags,
+    photos: listing.photos,
+    attributes: listing.attributes,
+    accessories: listing.accessories,
+    testing_results: listing.testingResults,
+    staff_notes: listing.staffNotes,
+    shopify_product_id: listing.shopifyProductId,
+    shopify_variant_id: listing.shopifyVariantId,
+    shopify_inventory_item_id: listing.shopifyInventoryItemId,
+    shopify_handle: listing.shopifyHandle,
+    shopify_url: listing.shopifyUrl,
+    shopify_admin_url: listing.shopifyAdminUrl || null,
+    shopify_storefront_url: listing.shopifyStorefrontUrl || null,
+    publish_attempts: listing.publishAttempts || 0,
+    last_publish_attempt_at: listing.lastPublishAttemptAt || null,
+    publish_warning: listing.publishWarning || null,
+    shopify_location_id: listing.shopifyLocationId || null,
+    last_error: listing.lastError,
+    created_by_employee_id: listing.createdByEmployeeId,
+    created_at: listing.createdAt,
+    updated_at: listing.updatedAt,
+    published_at: listing.publishedAt,
+    last_synced_at: listing.lastSyncedAt,
+    ended_at: listing.endedAt,
   };
 }
 
@@ -769,6 +856,61 @@ export const db = {
       else count += batch.length;
     }
     return count;
+  },
+
+  // ── Shopify Listings ──
+  async getShopifyListings(storeId: string): Promise<ShopifyListing[]> {
+    const rows = await query<Record<string, unknown>>('pos_shopify_listings', storeId, 'updated_at', false);
+    return rows.map(mapShopifyListing);
+  },
+  async insertShopifyListing(listing: ShopifyListing): Promise<boolean> {
+    const row = shopifyListingRow(listing);
+    const saved = await insert('pos_shopify_listings', row);
+    if (saved) return true;
+    const fallback = { ...row };
+    delete fallback.shopify_admin_url;
+    delete fallback.shopify_storefront_url;
+    delete fallback.publish_attempts;
+    delete fallback.last_publish_attempt_at;
+    delete fallback.publish_warning;
+    delete fallback.shopify_location_id;
+    return !!await insert('pos_shopify_listings', fallback);
+  },
+  async updateShopifyListing(id: string, updates: Partial<ShopifyListing>): Promise<boolean> {
+    const mapped: Record<string, unknown> = { updated_at: updates.updatedAt || new Date().toISOString() };
+    if (updates.status !== undefined) mapped.status = updates.status;
+    if (updates.title !== undefined) mapped.title = updates.title;
+    if (updates.description !== undefined) mapped.description = updates.description;
+    if (updates.price !== undefined) mapped.price = updates.price;
+    if (updates.compareAtPrice !== undefined) mapped.compare_at_price = updates.compareAtPrice;
+    if (updates.quantity !== undefined) mapped.quantity = updates.quantity;
+    if (updates.condition !== undefined) mapped.condition = updates.condition;
+    if (updates.shopifyVendor !== undefined) mapped.shopify_vendor = updates.shopifyVendor;
+    if (updates.shopifyProductType !== undefined) mapped.shopify_product_type = updates.shopifyProductType;
+    if (updates.sku !== undefined) mapped.sku = updates.sku;
+    if (updates.barcode !== undefined) mapped.barcode = updates.barcode;
+    if (updates.tags !== undefined) mapped.tags = updates.tags;
+    if (updates.photos !== undefined) mapped.photos = updates.photos;
+    if (updates.attributes !== undefined) mapped.attributes = updates.attributes;
+    if (updates.accessories !== undefined) mapped.accessories = updates.accessories;
+    if (updates.testingResults !== undefined) mapped.testing_results = updates.testingResults;
+    if (updates.staffNotes !== undefined) mapped.staff_notes = updates.staffNotes;
+    if (updates.shopifyProductId !== undefined) mapped.shopify_product_id = updates.shopifyProductId;
+    if (updates.shopifyVariantId !== undefined) mapped.shopify_variant_id = updates.shopifyVariantId;
+    if (updates.shopifyInventoryItemId !== undefined) mapped.shopify_inventory_item_id = updates.shopifyInventoryItemId;
+    if (updates.shopifyHandle !== undefined) mapped.shopify_handle = updates.shopifyHandle;
+    if (updates.shopifyUrl !== undefined) mapped.shopify_url = updates.shopifyUrl;
+    if (updates.shopifyAdminUrl !== undefined) mapped.shopify_admin_url = updates.shopifyAdminUrl;
+    if (updates.shopifyStorefrontUrl !== undefined) mapped.shopify_storefront_url = updates.shopifyStorefrontUrl;
+    if (updates.publishAttempts !== undefined) mapped.publish_attempts = updates.publishAttempts;
+    if (updates.lastPublishAttemptAt !== undefined) mapped.last_publish_attempt_at = updates.lastPublishAttemptAt;
+    if (updates.publishWarning !== undefined) mapped.publish_warning = updates.publishWarning;
+    if (updates.shopifyLocationId !== undefined) mapped.shopify_location_id = updates.shopifyLocationId;
+    if (updates.lastError !== undefined) mapped.last_error = updates.lastError;
+    if (updates.publishedAt !== undefined) mapped.published_at = updates.publishedAt;
+    if (updates.lastSyncedAt !== undefined) mapped.last_synced_at = updates.lastSyncedAt;
+    if (updates.endedAt !== undefined) mapped.ended_at = updates.endedAt;
+    return update('pos_shopify_listings', id, mapped);
   },
 
   async seedInventory(storeId: string, items: InventoryItem[]): Promise<number> {

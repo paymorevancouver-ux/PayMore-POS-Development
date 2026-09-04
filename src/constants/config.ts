@@ -110,7 +110,7 @@ export const PROVINCES = [
 // Role permissions
 export const ROLE_PERMISSIONS: Record<EmployeeRole, string[]> = {
   admin: ['*'],
-  manager: ['dashboard', 'customer', 'purchases', 'sales', 'inventory', 'labels', 'returns', 'payment-changes', 'purchase-changes', 'drawer', 'reports', 'audit', 'settings'],
-  cashier: ['dashboard', 'sales', 'customer', 'drawer', 'returns', 'inventory', 'labels'],
-  buyer: ['dashboard', 'customer', 'purchases', 'inventory', 'labels', 'drawer'],
+  manager: ['dashboard', 'customer', 'purchases', 'sales', 'inventory', 'shopify-lister', 'labels', 'returns', 'payment-changes', 'purchase-changes', 'drawer', 'reports', 'audit', 'settings'],
+  cashier: ['dashboard', 'sales', 'customer', 'drawer', 'returns', 'inventory', 'shopify-lister', 'labels'],
+  buyer: ['dashboard', 'customer', 'purchases', 'inventory', 'shopify-lister', 'labels', 'drawer'],
 };

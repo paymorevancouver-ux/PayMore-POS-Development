@@ -25,6 +25,8 @@ import ReportsPage from '@/pages/ReportsPage';
 import SettingsPage from '@/pages/SettingsPage';
 import AuditPage from '@/pages/AuditPage';
 import UserManagementPage from '@/pages/UserManagementPage';
+import ShopifyListerPage from '@/pages/ShopifyListerPage';
+import ShopifyListingEditorPage from '@/pages/ShopifyListingEditorPage';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -101,6 +103,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/id-upload/:token" element={<IdUploadPage />} />
+        <Route path="/shopify-lister" element={<Navigate to="/pos/shopify-lister" replace />} />
         <Route
           path="/pos"
           element={
@@ -117,6 +120,8 @@ export default function App() {
           <Route path="customers/:customerId" element={<ProtectedRoute requiredModule="customer"><CustomerProfilePage /></ProtectedRoute>} />
           <Route path="drawer" element={<ProtectedRoute requiredModule="drawer"><CashDrawerPage /></ProtectedRoute>} />
           <Route path="inventory" element={<ProtectedRoute requiredModule="inventory"><InventoryPage /></ProtectedRoute>} />
+          <Route path="shopify-lister" element={<ProtectedRoute requiredModule="shopify-lister"><ShopifyListerPage /></ProtectedRoute>} />
+          <Route path="shopify-lister/:listingId" element={<ProtectedRoute requiredModule="shopify-lister"><ShopifyListingEditorPage /></ProtectedRoute>} />
           <Route path="labels" element={<ProtectedRoute requiredModule="labels"><LabelGeneratorPage /></ProtectedRoute>} />
           <Route path="sales" element={<ProtectedRoute requiredModule="sales"><SalesPage /></ProtectedRoute>} />
           <Route path="sales/history" element={<ProtectedRoute requiredModule="sales"><SalesHistoryPage /></ProtectedRoute>} />

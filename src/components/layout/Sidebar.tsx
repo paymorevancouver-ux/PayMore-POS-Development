@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, ContactRound, Landmark, Package, ShoppingCart, RotateCcw,
   ArrowRightLeft, FileEdit, BarChart3, Settings, ScrollText, LogOut,
-  UserCog, Tag,
+  UserCog, Tag, Store,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/taxCalc';
 import type { LucideIcon } from 'lucide-react';
@@ -41,6 +41,7 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     label: 'Transactions',
     items: [
       { path: '/pos/inventory', label: 'Inventory', icon: Package, module: 'inventory' },
+      { path: '/pos/shopify-lister', label: 'Shopify Auto Lister', icon: Store, module: 'shopify-lister' },
       {
         path: '/pos/sales',
         label: 'Sales',
@@ -124,7 +125,7 @@ export default function Sidebar() {
               {visibleItems.map((item) => {
                 const parentActive = item.children
                   ? location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
-                  : location.pathname === item.path;
+                  : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
                 const Icon = item.icon;
                 return (
                   <div key={item.path}>
