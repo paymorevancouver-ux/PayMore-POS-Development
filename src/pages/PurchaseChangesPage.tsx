@@ -120,7 +120,7 @@ export default function PurchaseChangesPage() {
       toast({ variant: 'destructive', title: 'No changes detected' }); return;
     }
 
-    pos.createPurchaseChange({
+    const changeId = pos.createPurchaseChange({
       purchaseTransactionId: selectedPurchase.id,
       purchaseItemId: selectedItem.id,
       oldValueJson: oldValues,
@@ -130,8 +130,7 @@ export default function PurchaseChangesPage() {
       storeId: store.id,
     });
 
-    const changeId = pos.purchaseChanges[0]?.id;
-    if (changeId) pos.completePurchaseChange(changeId, employee.fullName);
+    pos.completePurchaseChange(changeId, employee.fullName);
 
     toast({ title: 'Purchase change recorded' });
     setSelectedPurchase(null);
