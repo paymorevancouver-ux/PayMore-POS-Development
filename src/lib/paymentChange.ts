@@ -23,10 +23,26 @@ export function getCashTotal(payments: TransactionPayment[]): number {
   );
 }
 
+export type EditablePaymentSplit = {
+  method: TransactionPayment['method'];
+  amount: number;
+  reference: string;
+};
+
+/** Copy the transaction's current on-file payments into an editable split. */
+export function paymentsToEditableSplit(payments: TransactionPayment[]): EditablePaymentSplit[] {
+  return payments.map((p) => ({
+    method: p.method,
+    amount: p.amount,
+    reference: p.reference || '',
+  }));
+}
+
 /**
  * Cash drawer adjustment for a payment change.
- * Sales: newCash - oldCash (more cash in = positive).
- * Purchases: oldCash - newCash (less payout = cash back in).
+ * Compares current on-file cash (before) vs updated cash (after) — not historical sale/purchase totals.
+ * Sales: newCash - currentCash (more cash in = positive).
+ * Purchases: currentCash - newCash (less payout = cash back in).
  */
 export function calculatePaymentChangeDrawerDelta(
   transactionType: PaymentChangeTransactionType,

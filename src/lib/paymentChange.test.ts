@@ -4,6 +4,7 @@ import {
   getCashTotal,
   getPaymentsForTransaction,
   paymentsMatchTransaction,
+  paymentsToEditableSplit,
   validatePaymentChangeRecord,
 } from './paymentChange';
 import type { PaymentChange, TransactionPayment } from '@/types';
@@ -86,6 +87,41 @@ describe('paymentChange transaction resolution', () => {
 });
 
 describe('paymentChange drawer math', () => {
+  it('sale cash to debit returns cash to drawer (current cash removed)', () => {
+    const current = [payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'cash', amount: 100 })];
+    const updated = [payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'debit', amount: 100 })];
+    expect(calculatePaymentChangeDrawerDelta('sale', current, updated)).toBe(-100);
+  });
+
+  it('purchase cash to debit puts cash back in drawer', () => {
+    const current = [payment({ transactionType: 'purchase', transactionId: 'PUR-1', method: 'cash', amount: 100 })];
+    const updated = [payment({ transactionType: 'purchase', transactionId: 'PUR-1', method: 'debit', amount: 100 })];
+    expect(calculatePaymentChangeDrawerDelta('purchase', current, updated)).toBe(100);
+  });
+
+  it('pre-fills editable split from current on-file payments', () => {
+    const current = [
+      payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'cash', amount: 60 }),
+      payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'debit', amount: 40, reference: 'ref1' }),
+    ];
+    expect(paymentsToEditableSplit(current)).toEqual([
+      { method: 'cash', amount: 60, reference: '' },
+      { method: 'debit', amount: 40, reference: 'ref1' },
+    ]);
+  });
+
+  it('sale split change adjusts only cash delta', () => {
+    const current = [
+      payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'cash', amount: 60 }),
+      payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'debit', amount: 40 }),
+    ];
+    const updated = [
+      payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'cash', amount: 40 }),
+      payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'debit', amount: 60 }),
+    ];
+    expect(calculatePaymentChangeDrawerDelta('sale', current, updated)).toBe(-20);
+  });
+
   it('sale cash decrease removes money from drawer', () => {
     const oldPayments = [payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'cash', amount: 350 })];
     const newPayments = [payment({ transactionType: 'sale', transactionId: 'SAL-1', method: 'cash', amount: 300 })];

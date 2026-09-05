@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { Search, ArrowRightLeft, CheckCircle, Plus, X, History, Receipt, DollarSign, ShoppingBag } from 'lucide-react';
 import { formatCurrency, formatDateTime, round2 } from '@/lib/taxCalc';
-import { getPaymentsForTransaction } from '@/lib/paymentChange';
+import { getPaymentsForTransaction, getCashTotal, paymentsToEditableSplit } from '@/lib/paymentChange';
 import { PAYMENT_METHODS } from '@/constants/config';
 import type { PaymentMethod, SaleTransaction, PurchaseTransaction, TransactionPayment } from '@/types';
 
@@ -63,6 +63,24 @@ export default function PaymentChangesPage() {
 
   const txTotal = selectedTx ? ('totalAmount' in selectedTx ? selectedTx.totalAmount : 0) : 0;
   const newTotal = round2(newPayments.reduce((s, p) => s + p.amount, 0));
+  const currentCashTotal = getCashTotal(originalPayments);
+  const updatedCashTotal = getCashTotal(
+    newPayments.map((p, i) => ({
+      id: `preview-${i}`,
+      transactionType: selectedTxType,
+      transactionId: selectedTx?.id ?? '',
+      lineNumber: i + 1,
+      method: p.method,
+      amount: p.amount,
+      reference: p.reference,
+      createdAt: '',
+    })),
+  );
+  const previewDrawerDelta = selectedTx
+    ? (selectedTxType === 'purchase'
+      ? round2(currentCashTotal - updatedCashTotal)
+      : round2(updatedCashTotal - currentCashTotal))
+    : 0;
 
   // Recent sales (most recent first, completed only)
   const recentSales = useMemo(() => {
@@ -106,15 +124,35 @@ export default function PaymentChangesPage() {
   }, [pos.paymentChanges]);
 
   const handleSelectSale = (sale: SaleTransaction) => {
-    resetTransactionForm();
+    const current = getPaymentsForTransaction(
+      pos.salePayments,
+      pos.purchasePayments,
+      'sale',
+      sale.id,
+    );
     setSelectedTx(sale);
     setSelectedTxType('sale');
+    setNewPayments(paymentsToEditableSplit(current));
+    setNewMethod('cash');
+    setNewAmount(0);
+    setNewRef('');
+    setReason('');
   };
 
   const handleSelectPurchase = (purchase: PurchaseTransaction) => {
-    resetTransactionForm();
+    const current = getPaymentsForTransaction(
+      pos.salePayments,
+      pos.purchasePayments,
+      'purchase',
+      purchase.id,
+    );
     setSelectedTx(purchase);
     setSelectedTxType('purchase');
+    setNewPayments(paymentsToEditableSplit(current));
+    setNewMethod('cash');
+    setNewAmount(0);
+    setNewRef('');
+    setReason('');
   };
 
   const handleAddNewPayment = () => {
@@ -133,7 +171,13 @@ export default function PaymentChangesPage() {
     if (!selectedTx || !employee || !store || !reason.trim()) {
       toast({ variant: 'destructive', title: 'Enter a reason for this change' }); return;
     }
-    if (originalPayments.length === 0) {
+    const currentPayments = getPaymentsForTransaction(
+      pos.salePayments,
+      pos.purchasePayments,
+      selectedTxType,
+      selectedTx.id,
+    );
+    if (currentPayments.length === 0) {
       toast({
         variant: 'destructive',
         title: 'Payment record for this transaction could not be found. No changes were made.',
@@ -157,7 +201,7 @@ export default function PaymentChangesPage() {
       transactionType: selectedTxType,
       transactionId: selectedTx.id,
       transactionRef: txRef,
-      oldPaymentJson: originalPayments,
+      oldPaymentJson: currentPayments,
       newPaymentJson: fakeNewPayments,
       reason,
       changedByEmployeeId: employee.id,
@@ -166,10 +210,10 @@ export default function PaymentChangesPage() {
 
     // Remove old payments and add new ones
     if (selectedTxType === 'sale') {
-      originalPayments.forEach((p) => pos.removeSalePayment(p.id));
+      currentPayments.forEach((p) => pos.removeSalePayment(p.id));
       newPayments.forEach((p) => pos.addSalePayment(selectedTx.id, p.method, p.amount, p.reference));
     } else {
-      originalPayments.forEach((p) => pos.removePurchasePayment(p.id));
+      currentPayments.forEach((p) => pos.removePurchasePayment(p.id));
       newPayments.forEach((p) => pos.addPurchasePayment(selectedTx.id, p.method, p.amount, p.reference));
     }
 
@@ -364,7 +408,7 @@ export default function PaymentChangesPage() {
                       </div>
 
                       {/* Current payments */}
-                      <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">Current Payment</p>
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">Current Payment (on file)</p>
                       <div className="space-y-1">
                         {originalPayments.map((p) => (
                           <div key={p.id} className="flex items-center justify-between px-3 py-2 bg-red-50 border border-red-200 rounded text-[12px]">
@@ -382,7 +426,11 @@ export default function PaymentChangesPage() {
                   {/* New payment split */}
                   <Card>
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-[14px]">New Payment Split</CardTitle>
+                      <CardTitle className="text-[14px]">Updated Payment Split</CardTitle>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        Starts from the current on-file payments. Edit methods or amounts below.
+                        Cash drawer adjusts only by the change in cash: current {formatCurrency(currentCashTotal)} → updated {formatCurrency(updatedCashTotal)}.
+                      </p>
                     </CardHeader>
                     <CardContent>
                       <div className="flex gap-2 items-end mb-3">
@@ -427,11 +475,19 @@ export default function PaymentChangesPage() {
                             </div>
                           ))}
                           <div className="flex items-center justify-between px-3 py-2 bg-secondary rounded text-[12px]">
-                            <span className="font-medium">New Total</span>
+                            <span className="font-medium">Updated Total</span>
                             <span className={`font-mono font-bold tabular-nums ${Math.abs(newTotal - txTotal) < 0.01 ? 'text-emerald-600' : 'text-destructive'}`}>
                               {formatCurrency(newTotal)}
                             </span>
                           </div>
+                          {Math.abs(previewDrawerDelta) > 0.005 && (
+                            <div className="flex items-center justify-between px-3 py-2 bg-blue-50 border border-blue-200 rounded text-[11px]">
+                              <span className="font-medium text-blue-800">Cash drawer adjustment</span>
+                              <span className={`font-mono font-bold tabular-nums ${previewDrawerDelta > 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                                {previewDrawerDelta > 0 ? '+' : ''}{formatCurrency(previewDrawerDelta)}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       )}
 
