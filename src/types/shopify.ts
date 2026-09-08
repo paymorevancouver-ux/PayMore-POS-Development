@@ -17,6 +17,32 @@ export interface ShopifyAccessory {
   included: boolean;
   quantity?: number;
   custom?: boolean;
+  orphan?: boolean;
+}
+
+export interface ShopifyListingPhotoAsset {
+  id: string;
+  path?: string;
+  url: string;
+  sortOrder?: number;
+  source?: 'desktop' | 'mobile' | 'purchase';
+}
+
+export type ShopifyListingPhoto = string | ShopifyListingPhotoAsset;
+
+export interface ShopifyTaxonomyCategory {
+  id: string;
+  name: string;
+  fullName: string;
+  isLeaf?: boolean;
+  isRoot?: boolean;
+  level?: number;
+}
+
+export interface ShopifyTaxonomyAttribute {
+  id: string;
+  name: string;
+  handle?: string;
 }
 
 export interface ShopifyStorageDevice {
@@ -50,11 +76,26 @@ export interface ShopifyListing {
   sku: string;
   barcode: string;
   tags: string[];
-  photos: string[];
+  photos: ShopifyListingPhoto[];
   attributes: Record<string, unknown>;
   accessories: ShopifyAccessory[];
   testingResults: Record<string, ShopifyTestResult>;
   staffNotes: string;
+  extraTitleText?: string;
+  cosmeticConditionKey?: string;
+  cosmeticConditionNotes?: string;
+  functionalityConditionKey?: string;
+  functionalityNotes?: string;
+  descriptionMode?: 'generated' | 'manual';
+  includeNotListedWarning?: boolean;
+  originCountry?: string;
+  publicNotes?: string;
+  titleMode?: 'generated' | 'manual';
+  shopifyCategoryId: string | null;
+  shopifyCategoryName: string | null;
+  shopifyCategoryFullName: string | null;
+  shopifyCategoryConfirmed: boolean;
+  shopifyTaxonomyAttributes?: ShopifyTaxonomyAttribute[];
   shopifyProductId: string | null;
   shopifyVariantId: string | null;
   shopifyInventoryItemId: string | null;
@@ -73,6 +114,9 @@ export interface ShopifyListing {
   publishedAt: string | null;
   lastSyncedAt: string | null;
   endedAt: string | null;
+  syncStatus?: 'idle' | 'pending' | 'synced' | 'error';
+  lastSyncError?: string | null;
+  lastSyncEventType?: string | null;
 }
 
 export const SHOPIFY_LISTING_STATUSES: ShopifyListingStatus[] = [

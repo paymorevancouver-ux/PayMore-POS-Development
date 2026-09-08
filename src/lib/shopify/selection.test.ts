@@ -30,4 +30,10 @@ describe('Shopify inventory selection', () => {
     expect(selectionCountLabel(0)).toBe('0 / 10 selected');
     expect(selectionCountLabel(3)).toBe('3 / 10 selected');
   });
+
+  it('keeps previously selected ids when adding another tab under the max', () => {
+    const first = toggleInventorySelection([], 'INV-1').selectedIds;
+    const second = toggleInventorySelection(first, 'INV-2').selectedIds;
+    expect(second).toEqual(['INV-1', 'INV-2']);
+  });
 });

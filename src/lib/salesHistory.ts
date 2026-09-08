@@ -83,7 +83,17 @@ function pushPart(parts: string[], value: string | null | undefined) {
 }
 
 export function paymentMethodLabel(method: string): string {
+  if (method === 'shopify') return 'Shopify';
   return PAYMENT_METHODS.find((m) => m.value === method)?.label || method;
+}
+
+export function salesChannelLabel(channel: string | null | undefined): string {
+  if (channel === 'shopify') return 'Shopify';
+  if (channel === 'in-store') return 'In-Store';
+  if (channel === 'online') return 'Online';
+  if (channel === 'phone') return 'Phone';
+  if (channel === 'marketplace') return 'Marketplace';
+  return channel || '—';
 }
 
 export function saleStatusLabel(status: SaleTransaction['status']): string {
@@ -120,6 +130,11 @@ export function buildSaleSearchBlob(args: {
   const parts: string[] = [];
   pushPart(parts, args.sale.id);
   pushPart(parts, args.sale.saleCode);
+  pushPart(parts, args.sale.salesChannel);
+  pushPart(parts, args.sale.shopifyOrderName);
+  pushPart(parts, args.sale.shopifyOrderId);
+  pushPart(parts, args.sale.shopifyCustomerName);
+  pushPart(parts, args.sale.shopifyCustomerEmail);
   pushPart(parts, args.employeeName);
   pushPart(parts, args.statusLabel);
   pushPart(parts, args.returnStatus);

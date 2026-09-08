@@ -9,12 +9,13 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
-  Search, Printer, Eye, ChevronDown, ChevronRight, RotateCcw,
+  Search, Printer, Eye, ChevronDown, ChevronRight, RotateCcw, ExternalLink,
 } from 'lucide-react';
 import { formatCurrency, formatDateTime } from '@/lib/taxCalc';
 import {
   buildSalesHistoryRows,
   DEFAULT_SALES_HISTORY_FILTERS,
+  salesChannelLabel,
   type SalesHistoryDatePreset,
   type SalesHistoryFilters,
 } from '@/lib/salesHistory';
@@ -227,6 +228,7 @@ export default function SalesHistoryPage() {
               <TableRow>
                 <TableHead className="w-8" />
                 <TableHead className="text-[11px]">Sale ID</TableHead>
+                <TableHead className="text-[11px]">Channel</TableHead>
                 <TableHead className="text-[11px]">Sale Date / Time</TableHead>
                 <TableHead className="text-[11px]">Customer Name</TableHead>
                 <TableHead className="text-[11px] text-right">Items</TableHead>
@@ -262,9 +264,17 @@ export default function SalesHistoryPage() {
                       <TableCell className="font-mono text-[12px] font-semibold text-primary whitespace-nowrap">
                         {row.sale.saleCode}
                       </TableCell>
+                      <TableCell className="text-[12px] whitespace-nowrap">
+                        <Badge variant="outline" className="text-[9px]">{salesChannelLabel(row.sale.salesChannel)}</Badge>
+                        {row.sale.shopifyOrderName && (
+                          <div className="font-mono text-[10px] text-muted-foreground mt-0.5">{row.sale.shopifyOrderName}</div>
+                        )}
+                      </TableCell>
                       <TableCell className="text-[12px] whitespace-nowrap">{formatDateTime(row.saleAt)}</TableCell>
                       <TableCell className="text-[12px] font-medium">
-                        {customer ? `${customer.firstName} ${customer.lastName}` : 'Walk-in'}
+                        {customer
+                          ? `${customer.firstName} ${customer.lastName}`
+                          : row.sale.shopifyCustomerName || (row.sale.salesChannel === 'shopify' ? (row.sale.shopifyCustomerEmail || 'Shopify customer') : 'Walk-in')}
                       </TableCell>
                       <TableCell className="text-right font-mono text-[12px]">{row.itemCount}</TableCell>
                       <TableCell className="text-[12px] max-w-[220px] truncate">{row.productSummary}</TableCell>
@@ -298,6 +308,13 @@ export default function SalesHistoryPage() {
                               <Printer className="size-3 mr-1" />Reprint Receipt
                             </Button>
                           )}
+                          {row.sale.shopifyOrderUrl && (
+                            <Button size="sm" variant="outline" className="h-7 text-[10px]" asChild>
+                              <a href={row.sale.shopifyOrderUrl} target="_blank" rel="noreferrer">
+                                <ExternalLink className="size-3 mr-1" />Open Shopify Order
+                              </a>
+                            </Button>
+                          )}
                           {canStartReturn && row.canReturn && (
                             <Button size="sm" className="h-7 text-[10px]"
                               onClick={() => navigate(`/pos/returns?saleId=${encodeURIComponent(row.sale.id)}`)}>
@@ -309,7 +326,7 @@ export default function SalesHistoryPage() {
                     </TableRow>
                     {expanded && (
                       <TableRow className="hover:bg-transparent">
-                        <TableCell colSpan={15} className="bg-secondary/40 p-4">
+                        <TableCell colSpan={16} className="bg-secondary/40 p-4">
                           <p className="text-[12px] font-semibold mb-2">Items sold on this transaction</p>
                           {row.items.length === 0 ? (
                             <p className="text-[12px] text-muted-foreground">No line items recorded for this sale.</p>

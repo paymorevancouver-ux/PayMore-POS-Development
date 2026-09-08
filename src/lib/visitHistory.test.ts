@@ -165,7 +165,7 @@ describe('visitHistory', () => {
   it('finds a visit by device ID', () => {
     const rows = buildVisitHistoryRows(input, 'BC05-000846');
     expect(rows).toHaveLength(1);
-    expect(rows[0].devices[0].currentStatus).toBe('Live');
+    expect(rows[0].devices[0].currentStatus).toBe('Listed');
     expect(rows[0].devices[0].currentLocation).toBe('Rack 4 / R2');
   });
 

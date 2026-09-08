@@ -18,6 +18,9 @@ import { useEbayStore } from '@/stores/ebayStore';
 import { PROD_SETTINGS } from '@/constants/migrationData';
 import { STORE_ID } from '@/constants/mockData';
 import { applyInventoryReturn, applyInventorySaleDeduction, validateSaleQuantity } from '@/lib/inventorySale';
+import { listingMethodOf } from '@/lib/inventoryLifecycle';
+import { paymentAffectsCashDrawer } from '@/lib/shopify/saleSync';
+import { requestShopifyInventorySync } from '@/lib/shopify/requestInventorySync';
 import {
   calculatePaymentChangeDrawerDelta,
   validatePaymentChangeRecord,
@@ -92,6 +95,7 @@ interface PosState {
   // Inventory
   addInventoryItem: (item: Omit<InventoryItem, 'id' | 'deviceCode' | 'acquiredAt' | 'soldAt' | 'storageLocation' | 'storageRack' | 'storageRow' | 'labelGenerated' | 'labelGeneratedAt' | 'labelGeneratedBy' | 'labelPrintCount' | 'lastLabelPrintAt' | 'lastLabelPrintBy'> & Partial<Pick<InventoryItem, 'storageLocation' | 'storageRack' | 'storageRow' | 'labelGenerated'>>) => string;
   updateInventoryItem: (id: string, updates: Partial<InventoryItem>) => void;
+  markInventoryProcessed: (itemId: string, employeeId: string, employeeName: string, extras?: Partial<InventoryItem>) => boolean;
 
   // Inventory Location & Labels
   assignInventoryLocation: (itemId: string, location: string, rack: string, row: string, employeeId: string, employeeName: string, notes?: string) => Promise<void>;
@@ -107,12 +111,12 @@ interface PosState {
   removeSaleItem: (saleId: string, itemId: string) => void;
   addSalePayment: (saleId: string, method: PaymentMethod, amount: number, reference?: string) => void;
   removeSalePayment: (paymentId: string) => void;
-  completeSale: (saleId: string, employeeName: string) => { success: boolean; error?: string };
+  completeSale: (saleId: string, employeeName: string) => Promise<{ success: boolean; error?: string; shopifySyncRequired?: boolean }>;
   voidSale: (saleId: string) => void;
 
   // Returns
   createReturn: (data: Omit<Return, 'id' | 'returnCode' | 'createdAt' | 'completedAt' | 'status'>) => string;
-  completeReturn: (returnId: string, employeeName: string, returnQuantity?: number) => void;
+  completeReturn: (returnId: string, employeeName: string, returnQuantity?: number) => Promise<void>;
 
   // Payment Changes
   createPaymentChange: (data: Omit<PaymentChange, 'id' | 'createdAt' | 'completedAt' | 'status'>) => string;
@@ -457,6 +461,31 @@ export const usePosStore = create<PosState>()(
       set((s) => ({ inventory: s.inventory.map((i) => i.id === id ? { ...i, ...updates } : i) }));
       db.updateInventory(id, updates);
     },
+    markInventoryProcessed: (itemId, employeeId, employeeName, extras = {}) => {
+      if (!employeeId) return false;
+      const item = get().inventory.find((i) => i.id === itemId);
+      if (!item || item.status !== 'available' || item.quantityOnHand <= 0) return false;
+      if (item.listingMethod === 'processed_manual' || item.listingMethod === 'shopify') return false;
+      const processedAt = new Date().toISOString();
+      const processed = {
+        ...extras,
+        status: 'listed' as const,
+        listingMethod: 'processed_manual' as const,
+        processedAt,
+        processedByEmployeeId: employeeId,
+      };
+      get().updateInventoryItem(itemId, processed);
+      get().logAction(
+        employeeId,
+        employeeName,
+        'Inventory',
+        'INVENTORY_MARKED_PROCESSED',
+        'inventory',
+        itemId,
+        `inventory=${itemId} device=${item.deviceCode} employee=${employeeId} processedAt=${processedAt}`,
+      );
+      return true;
+    },
 
     // ── Inventory: Storage Location ──
     assignInventoryLocation: async (itemId, location, rack, row, employeeId, employeeName, notes = '') => {
@@ -610,7 +639,7 @@ export const usePosStore = create<PosState>()(
       set((s) => ({ salePayments: s.salePayments.filter((p) => p.id !== paymentId) }));
       db.deletePayment(paymentId);
     },
-    completeSale: (saleId, employeeName) => {
+    completeSale: async (saleId, employeeName) => {
       const state = get();
       const sale = state.sales.find((sl) => sl.id === saleId);
       if (!sale) return { success: false, error: 'Sale not found' };
@@ -632,26 +661,37 @@ export const usePosStore = create<PosState>()(
       }
 
       const completedAt = new Date().toISOString();
-      set((s) => ({ sales: s.sales.map((sl) => sl.id === saleId ? { ...sl, status: 'completed' as const, completedAt } : sl) }));
-      db.updateSale(saleId, { status: 'completed', completedAt });
+      const syncedIds: string[] = [];
 
-      items.forEach((item) => {
-        if (!item.inventoryItemId) return;
+      for (const item of items) {
+        if (!item.inventoryItemId) continue;
         const inv = get().inventory.find((i) => i.id === item.inventoryItemId);
-        if (!inv) return;
+        if (!inv) continue;
 
-        const deduction = applyInventorySaleDeduction(
+        const rpc = await db.sellInventoryAtomic(item.inventoryItemId, item.quantity, completedAt);
+        const deduction = rpc || applyInventorySaleDeduction(
           inv.quantityOnHand,
           item.quantity,
           inv.status,
           completedAt,
         );
-
-        get().updateInventoryItem(item.inventoryItemId, {
-          quantityOnHand: deduction.quantityOnHand,
-          status: deduction.status,
-          soldAt: deduction.soldAt,
-        });
+        if (!rpc) {
+          if (deduction.quantityOnHand < 0) {
+            return { success: false, error: 'Quantity cannot be negative.' };
+          }
+          get().updateInventoryItem(item.inventoryItemId, {
+            quantityOnHand: deduction.quantityOnHand,
+            status: deduction.status,
+            soldAt: deduction.soldAt,
+          });
+        } else {
+          get().updateInventoryItem(item.inventoryItemId, {
+            quantityOnHand: deduction.quantityOnHand,
+            status: deduction.status,
+            soldAt: deduction.soldAt,
+          });
+        }
+        if (listingMethodOf(inv) === 'shopify') syncedIds.push(item.inventoryItemId);
 
         if (deduction.fullySold) {
           try {
@@ -663,9 +703,12 @@ export const usePosStore = create<PosState>()(
             }
           } catch (e) { console.error('eBay auto-end error:', e); }
         }
-      });
+      }
 
-      const cashTotal = round2(payments.filter((p) => p.method === 'cash').reduce((s2, p) => s2 + p.amount, 0));
+      set((s) => ({ sales: s.sales.map((sl) => sl.id === saleId ? { ...sl, status: 'completed' as const, completedAt } : sl) }));
+      db.updateSale(saleId, { status: 'completed', completedAt });
+
+      const cashTotal = round2(payments.filter((p) => paymentAffectsCashDrawer(p.method)).reduce((s2, p) => s2 + p.amount, 0));
       if (cashTotal > 0) {
         get().addDrawerEntry('sale', cashTotal, `Sale ${sale.saleCode} — Cash portion`, sale.employeeId, sale.storeId, 'sale', saleId);
       }
@@ -674,7 +717,25 @@ export const usePosStore = create<PosState>()(
       get().logAction(sale.employeeId, employeeName, 'Sales', 'SALE_COMPLETE', 'sale', saleId,
         `Sale ${sale.saleCode} — $${sale.totalAmount.toFixed(2)} (${soldUnits} units)`);
 
-      return { success: true };
+      let shopifySyncRequired = false;
+      for (const inventoryItemId of [...new Set(syncedIds)]) {
+        const result = await requestShopifyInventorySync({
+          inventoryItemId,
+          reason: 'POS_SALE_SHOPIFY_SYNC',
+          storeId: sale.storeId,
+          employeeId: sale.employeeId,
+          employeeName,
+          posSaleId: saleId,
+        });
+        if (!result.success) shopifySyncRequired = true;
+      }
+
+      if (shopifySyncRequired) {
+        get().logAction(sale.employeeId, employeeName, 'Shopify Sync', 'SHOPIFY_SYNC_ERROR', 'sale', saleId,
+          `SHOPIFY SYNC REQUIRED — POS sale ${sale.saleCode} completed but Shopify quantity/archive failed.`);
+      }
+
+      return { success: true, shopifySyncRequired };
     },
     voidSale: (saleId) => {
       const sale = get().sales.find((sl) => sl.id === saleId);
@@ -691,7 +752,7 @@ export const usePosStore = create<PosState>()(
       db.insertReturn(data.storeId, ret);
       return id;
     },
-    completeReturn: (returnId, employeeName, returnQuantity) => {
+    completeReturn: async (returnId, employeeName, returnQuantity) => {
       const state = get();
       const ret = state.returns.find((r) => r.id === returnId);
       if (!ret) return;
@@ -699,20 +760,50 @@ export const usePosStore = create<PosState>()(
       set((s) => ({ returns: s.returns.map((r) => r.id === returnId ? { ...r, status: 'completed' as const, completedAt } : r) }));
       db.updateReturn(returnId, { status: 'completed', completedAt });
 
+      const sellable = ret.restockSellable !== false;
       if (ret.sourceItemId) {
         const saleItem = state.saleItems.find((i) => i.id === ret.sourceItemId);
         if (saleItem?.inventoryItemId) {
           const inv = state.inventory.find((i) => i.id === saleItem.inventoryItemId);
           if (inv) {
             const qty = returnQuantity ?? saleItem.quantity;
-            const restored = applyInventoryReturn(inv.quantityOnHand, qty, inv.status);
-            get().updateInventoryItem(saleItem.inventoryItemId, restored);
+            const listingMethod = listingMethodOf(inv);
+            const restored = applyInventoryReturn(inv.quantityOnHand, qty, inv.status, {
+              listingMethod,
+              sellable,
+            });
+            const rpc = await db.restoreInventoryAtomic(
+              saleItem.inventoryItemId,
+              sellable ? qty : 0,
+              restored.status,
+              sellable,
+            );
+            get().updateInventoryItem(saleItem.inventoryItemId, rpc ? {
+              quantityOnHand: rpc.quantityOnHand,
+              status: rpc.status,
+              soldAt: null,
+            } : restored);
+
+            const finalQty = rpc?.quantityOnHand ?? restored.quantityOnHand;
+            if (listingMethod === 'shopify' && sellable && finalQty > 0) {
+              const result = await requestShopifyInventorySync({
+                inventoryItemId: saleItem.inventoryItemId,
+                reason: 'POS_RETURN_SHOPIFY_RESTOCK',
+                storeId: ret.storeId,
+                employeeId: ret.employeeId,
+                employeeName,
+                posReturnId: returnId,
+              });
+              if (!result.success) {
+                get().logAction(ret.employeeId, employeeName, 'Shopify Sync', 'SHOPIFY_SYNC_ERROR', 'return', returnId,
+                  `SHOPIFY SYNC REQUIRED — POS return ${ret.returnCode} completed but Shopify reactivation failed.`);
+              }
+            }
           }
         }
       }
 
-      // Cash drawer — only CASH refunds
-      if (ret.refundMethod === 'cash' && ret.returnAmount > 0) {
+      if (paymentAffectsCashDrawer(ret.refundMethod) && ret.returnAmount > 0) {
         get().addDrawerEntry('return', -ret.returnAmount, `Return ${ret.returnCode} — Cash refund`, ret.employeeId, ret.storeId, 'return', returnId);
       }
 

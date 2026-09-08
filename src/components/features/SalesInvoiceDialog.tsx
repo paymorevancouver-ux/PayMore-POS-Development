@@ -111,7 +111,10 @@ export default function SalesInvoiceDialog({
                 <div><span style={{ fontWeight: 'bold', display: 'inline-block', width: 80 }}>Invoice #:</span> {sale.saleCode}</div>
                 <div><span style={{ fontWeight: 'bold', display: 'inline-block', width: 80 }}>Date:</span> {formatInvoiceDate(sale.completedAt || sale.createdAt)}</div>
                 <div><span style={{ fontWeight: 'bold', display: 'inline-block', width: 80 }}>Cashier:</span> {emp?.fullName || '—'}</div>
-                <div><span style={{ fontWeight: 'bold', display: 'inline-block', width: 80 }}>Channel:</span> {sale.salesChannel}</div>
+                <div><span style={{ fontWeight: 'bold', display: 'inline-block', width: 80 }}>Channel:</span> {sale.salesChannel === 'shopify' ? 'Shopify' : sale.salesChannel}</div>
+                {sale.shopifyOrderName && (
+                  <div><span style={{ fontWeight: 'bold', display: 'inline-block', width: 80 }}>Shopify:</span> {sale.shopifyOrderName}</div>
+                )}
               </div>
               <div style={{ fontSize: 10, textAlign: 'right' }}>
                 {customer ? (

@@ -20,6 +20,7 @@ const REQUIRED_SCOPES = [
   'read_inventory',
   'write_inventory',
   'read_locations',
+  'read_orders',
 ];
 
 Deno.serve(async (req) => {

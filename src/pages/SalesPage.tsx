@@ -51,7 +51,7 @@ export default function SalesPage() {
   const invoiceCustomer = invoiceSale?.customerId ? pos.customers.find((c) => c.id === invoiceSale.customerId) : null;
 
   const availableInv = useMemo(() => {
-    const items = pos.inventory.filter((i) => i.status === 'listed' && i.quantityOnHand > 0);
+    const items = pos.inventory.filter((i) => (i.status === 'listed' || i.status === 'available') && i.quantityOnHand > 0);
     if (!invSearch.trim()) return items.slice(0, 20);
     const q = invSearch.toLowerCase();
     return items.filter((i) => `${i.brand} ${i.model}`.toLowerCase().includes(q) || i.deviceCode.toLowerCase().includes(q) || i.serialImei.toLowerCase().includes(q));
@@ -112,7 +112,7 @@ export default function SalesPage() {
     pos.updateSaleItem(activeSaleId, lineId, { quantity: qty });
   };
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
     if (completing) return;
     if (!activeSaleId || !activeSale || activeSaleItems.length === 0) { toast({ variant: 'destructive', title: 'Cart is empty' }); return; }
     if (remaining > 0.01) { toast({ variant: 'destructive', title: 'Payment incomplete', description: `Still owed: ${formatCurrency(remaining)}` }); return; }
@@ -130,7 +130,7 @@ export default function SalesPage() {
 
     setCompleting(true);
     const saleForInvoice = { ...activeSale };
-    const result = pos.completeSale(activeSaleId, employee.fullName);
+    const result = await pos.completeSale(activeSaleId, employee.fullName);
     setCompleting(false);
 
     if (!result.success) {
@@ -146,6 +146,13 @@ export default function SalesPage() {
 
     setActiveSaleId(null);
     toast({ title: 'Sale completed!', description: `${saleForInvoice.saleCode} — ${formatCurrency(saleForInvoice.totalAmount)}` });
+    if (result.shopifySyncRequired) {
+      toast({
+        variant: 'destructive',
+        title: 'SHOPIFY SYNC REQUIRED',
+        description: 'The POS sale completed, but Shopify quantity could not be updated. Open Shopify Sync to retry.',
+      });
+    }
   };
 
   const handleVoid = () => {

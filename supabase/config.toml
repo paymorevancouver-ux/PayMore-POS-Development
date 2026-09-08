@@ -1,0 +1,5 @@
+# Function-specific overrides. Shopify webhook callbacks cannot send a Supabase user JWT.
+# Security for shopify-order-webhook is Shopify HMAC verification of the raw request body.
+
+[functions.shopify-order-webhook]
+verify_jwt = false

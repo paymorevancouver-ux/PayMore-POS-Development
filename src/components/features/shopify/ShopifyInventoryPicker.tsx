@@ -31,11 +31,11 @@ export function buildEligibleRows(
       holding: eligibility.holding,
       action: checkDuplicateShopifyListing(listings, item.id),
     };
-  }).filter((row) => row.action.action !== 'already-listed' || evaluateShopifyEligibility({
+  }).filter((row) => evaluateShopifyEligibility({
     inventory: row.item,
     listings,
     holdingPeriodDays,
-  }).eligible || row.action.action === 'continue-draft');
+  }).eligible);
 }
 
 export default function ShopifyInventoryPicker({

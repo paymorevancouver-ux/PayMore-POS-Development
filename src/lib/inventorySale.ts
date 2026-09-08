@@ -67,8 +67,28 @@ export function applyInventoryReturn(
   currentQuantity: number,
   returnQuantity: number,
   currentStatus: InventoryStatus,
+  options?: {
+    listingMethod?: 'shopify' | 'processed_manual' | null;
+    sellable?: boolean;
+  },
 ): Pick<InventorySaleDeduction, 'quantityOnHand' | 'status' | 'soldAt'> {
+  const sellable = options?.sellable !== false;
+  if (!sellable) {
+    return {
+      quantityOnHand: currentQuantity,
+      status: 'defective',
+      soldAt: null,
+    };
+  }
+
   const newQuantity = currentQuantity + returnQuantity;
+  if (options?.listingMethod === 'shopify' || options?.listingMethod === 'processed_manual') {
+    return {
+      quantityOnHand: newQuantity,
+      status: 'listed',
+      soldAt: null,
+    };
+  }
 
   if (currentStatus === 'listed' || currentStatus === 'available') {
     return {
@@ -80,7 +100,7 @@ export function applyInventoryReturn(
 
   return {
     quantityOnHand: newQuantity,
-    status: 'returned',
+    status: 'available',
     soldAt: null,
   };
 }

@@ -1,4 +1,6 @@
 import { getHoldingPeriodStatus } from '@/lib/holdingPeriod';
+import { OUT_OF_STOCK_LISTING_MESSAGE } from '@/lib/inventoryLifecycle';
+import { persistedCategoryIsPublishable, shopifyCategoryRequiredMessage } from '@/lib/shopify/categoryPersistence';
 import { isInternalAttributeKey } from '@/lib/shopify/visibility';
 import { getAttributeValue, isUsablePublicValue } from '@/lib/shopify/attributes';
 import type { InventoryItem } from '@/types';
@@ -69,11 +71,145 @@ export function shouldCreateShopifyProduct(listing: Pick<ShopifyListing, 'shopif
   return !listing.shopifyProductId;
 }
 
+export function publishStepError(step: string, message: string): string {
+  return `${step}: ${String(message || 'failed').trim()}`.slice(0, 500);
+}
+
+export function looksLikeHtml(value: string): boolean {
+  return /<(div|h1|h2|h3|h4|table|ul|ol|p|span|br|hr)\b/i.test(String(value || ''));
+}
+
+export function descriptionHtmlLooksEscaped(value: string): boolean {
+  const text = String(value || '').trim();
+  return text.startsWith('&lt;') || text.startsWith('&amp;lt;') || text.startsWith('&amp;amp;lt;');
+}
+
+export function unescapeEscapedHtml(value: string): string {
+  let text = String(value || '');
+  if (!descriptionHtmlLooksEscaped(text) && !text.includes('&lt;div') && !text.includes('&lt;h1')) return text;
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/** POS preview HTML must be sent to Shopify descriptionHtml unescaped. */
+export function approvedDescriptionHtml(description: string): string {
+  const text = unescapeEscapedHtml((description || '').replace(/\r\n/g, '\n').trim());
+  if (!text) return '';
+  if (looksLikeHtml(text)) return text;
+  return descriptionToHtml(text);
+}
+
+export function descriptionVerificationIssue(sentHtml: string, shopifyDescriptionHtml: string | null | undefined): string | null {
+  const sent = String(sentHtml || '').trim();
+  const got = String(shopifyDescriptionHtml || '').trim();
+  if (!sent) return null;
+  if (descriptionHtmlLooksEscaped(got)) {
+    return publishStepError('DESCRIPTION_VERIFY', 'Shopify descriptionHtml stored escaped HTML instead of rendered HTML.');
+  }
+  if (looksLikeHtml(sent) && descriptionHtmlLooksEscaped(sent)) {
+    return publishStepError('DESCRIPTION_VERIFY', 'POS description was HTML-escaped before publish.');
+  }
+  if (looksLikeHtml(sent) && !looksLikeHtml(got) && /<(div|h1)\b/i.test(sent)) {
+    return publishStepError('DESCRIPTION_VERIFY', 'Shopify descriptionHtml did not keep the approved HTML.');
+  }
+  return null;
+}
+
+export interface ShopifyVariantSnapshot {
+  id?: string | null;
+  sku?: string | null;
+  barcode?: string | null;
+  title?: string | null;
+  inventoryItem?: { id?: string | null } | null;
+}
+
+export function chooseInitialVariant(nodes: ShopifyVariantSnapshot[] | null | undefined): ShopifyVariantSnapshot | null {
+  const list = (nodes || []).filter((row) => row?.id);
+  if (!list.length) return null;
+  return list.find((row) => /default title/i.test(String(row.title || ''))) || list[0];
+}
+
+export function unexpectedVariantCountMessage(count: number): string | null {
+  if (count === 1) return null;
+  return publishStepError('VARIANT_VERIFY', `Unexpected Shopify variant count. Expected 1, found ${count}.`);
+}
+
+export type SkuLookupDecision =
+  | { action: 'create' }
+  | { action: 'adopt'; productId: string; variantId: string; inventoryItemId: string }
+  | { action: 'duplicate'; message: string };
+
+export function skuLookupDecision(
+  sku: string,
+  matches: Array<{ productId: string; variantId: string; inventoryItemId?: string; sku?: string | null }>,
+): SkuLookupDecision {
+  const wanted = String(sku || '').trim().toUpperCase();
+  const exact = matches.filter((row) => String(row.sku || '').trim().toUpperCase() === wanted && row.productId);
+  const uniqueProducts = [...new Set(exact.map((row) => row.productId))];
+  if (uniqueProducts.length === 0) return { action: 'create' };
+  if (uniqueProducts.length > 1) {
+    return {
+      action: 'duplicate',
+      message: publishStepError('SKU_LOOKUP', 'Duplicate Shopify SKU detected — manual reconciliation required.'),
+    };
+  }
+  const hit = exact.find((row) => row.productId === uniqueProducts[0])!;
+  return {
+    action: 'adopt',
+    productId: hit.productId,
+    variantId: hit.variantId,
+    inventoryItemId: hit.inventoryItemId || '',
+  };
+}
+
+export function costsMatch(posCost: number, shopifyAmount: string | number | null | undefined): boolean {
+  const left = Number(posCost);
+  const right = Number(shopifyAmount);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  return Math.abs(left - right) < 0.015;
+}
+
+export function categoryIdsMatch(expected: string, actual?: string | null): boolean {
+  const left = String(expected || '').trim();
+  const right = String(actual || '').trim();
+  return Boolean(left) && left === right;
+}
+
+export function productSetCreateOmitsDefaultOption(input: { productOptions?: unknown; variants?: unknown[] }): boolean {
+  return input.productOptions == null && input.variants == null;
+}
+
+export function productSetUpdateUsesIdentifier(
+  identifier: { id?: string } | null | undefined,
+  input: { id?: string },
+): boolean {
+  return Boolean(identifier?.id) && input.id == null;
+}
+
+export function canFinalizeShopifyLabel(input: {
+  success?: boolean;
+  listingStatus?: string;
+  barcode?: string | null;
+  shopifyProductId?: string | null;
+}): boolean {
+  return Boolean(
+    input.success
+    && input.listingStatus === 'active'
+    && input.shopifyProductId
+    && String(input.barcode || '').trim()
+    && !/^[A-Z]{2,}\d{0,2}-\d+$/i.test(String(input.barcode || '').trim()),
+  );
+}
+
 export function validatePublishQuantity(listingQty: number, onHand: number): PublishEligibilityIssue[] {
   const issues: PublishEligibilityIssue[] = [];
   if (!(listingQty > 0)) issues.push({ field: 'quantity', message: 'Listing quantity must be greater than 0.' });
-  if (!(onHand > 0)) issues.push({ field: 'quantity_on_hand', message: 'POS quantity on hand must be greater than 0.' });
-  if (listingQty > onHand) {
+  if (!(onHand > 0)) issues.push({ field: 'quantity_on_hand', message: OUT_OF_STOCK_LISTING_MESSAGE });
+  if (listingQty > onHand && onHand > 0) {
     issues.push({ field: 'quantity', message: 'Listing quantity cannot exceed POS quantity on hand.' });
   }
   return issues;
@@ -104,6 +240,9 @@ export function validatePublishEligibility(input: {
   issues.push(...validatePublishPrice(listing.price));
   if (!listing.shopifyVendor?.trim()) issues.push({ field: 'vendor', message: 'Vendor is required.' });
   if (!listing.shopifyProductType?.trim()) issues.push({ field: 'productType', message: 'Product type is required.' });
+  if (!persistedCategoryIsPublishable(listing)) {
+    issues.push({ field: 'shopifyCategoryId', message: shopifyCategoryRequiredMessage(listing) });
+  }
   if (!String(listing.condition || '').trim()) issues.push({ field: 'condition', message: 'Condition is required.' });
 
   if (!inventory) {
@@ -111,6 +250,9 @@ export function validatePublishEligibility(input: {
   } else {
     issues.push(...validatePublishQuantity(listing.quantity, inventory.quantityOnHand));
     if (inventory.status === 'sold') issues.push({ field: 'inventory', message: 'Inventory item is sold.' });
+    if (inventory.status === 'listed' || inventory.listingMethod === 'processed_manual') {
+      issues.push({ field: 'inventory', message: 'Inventory item is already listed.' });
+    }
     if (inventory.status === 'scrapped') issues.push({ field: 'inventory', message: 'Inventory item is scrapped.' });
     const holding = getHoldingPeriodStatus(inventory.acquiredAt, input.holdingPeriodDays, input.now);
     if (!holding.completed) issues.push({ field: 'holding', message: `Holding period is not complete (${holding.label}).` });
@@ -145,8 +287,9 @@ export function sanitizePublishTags(tags: string[]): string[] {
 }
 
 export function descriptionToHtml(description: string): string {
-  const text = (description || '').replace(/\r\n/g, '\n').trim();
+  const text = unescapeEscapedHtml((description || '').replace(/\r\n/g, '\n').trim());
   if (!text) return '';
+  if (looksLikeHtml(text)) return text;
   const blocks = text.split(/\n{2,}/);
   return blocks.map((block) => {
     const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -240,6 +383,7 @@ export function applyPublishSuccess(
     shopifyAdminUrl?: string | null;
     shopifyStorefrontUrl?: string | null;
     warning?: string | null;
+    barcode?: string | null;
   },
   now = new Date().toISOString(),
 ): ShopifyListing {
@@ -251,6 +395,7 @@ export function applyPublishSuccess(
     shopifyInventoryItemId: result.shopifyInventoryItemId,
     shopifyHandle: result.shopifyHandle || listing.shopifyHandle,
     shopifyUrl: result.shopifyAdminUrl || result.shopifyUrl || listing.shopifyUrl,
+    barcode: result.barcode || listing.barcode,
     lastError: null,
     publishedAt: listing.publishedAt || now,
     lastSyncedAt: now,
@@ -258,11 +403,20 @@ export function applyPublishSuccess(
   };
 }
 
-export function applyPublishFailure(listing: ShopifyListing, message: string, now = new Date().toISOString()): ShopifyListing {
+export function applyPublishFailure(
+  listing: ShopifyListing,
+  message: string,
+  extra?: Partial<Pick<ShopifyListing, 'shopifyProductId' | 'shopifyVariantId' | 'shopifyInventoryItemId' | 'barcode'>>,
+  now = new Date().toISOString(),
+): ShopifyListing {
   return {
     ...listing,
     status: 'error',
     lastError: sanitizeShopifyError(message),
+    shopifyProductId: extra?.shopifyProductId || listing.shopifyProductId,
+    shopifyVariantId: extra?.shopifyVariantId || listing.shopifyVariantId,
+    shopifyInventoryItemId: extra?.shopifyInventoryItemId || listing.shopifyInventoryItemId,
+    barcode: extra?.barcode || listing.barcode,
     updatedAt: now,
   };
 }

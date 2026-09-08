@@ -5,7 +5,10 @@ export type InventoryStatusFilter =
   | 'all'
   | 'available'
   | 'listed'
+  | 'shopify_listed'
+  | 'processed_manual'
   | 'sold'
+  | 'sold_out'
   | 'returned'
   | 'scrapped';
 
@@ -22,8 +25,8 @@ export type InventorySortDirection = 'asc' | 'desc';
 
 const STATUS_SEARCH_ALIASES: Record<InventoryStatus, string[]> = {
   available: ['non-listed', 'non listed', 'not listed'],
-  listed: ['live', 'available', 'listed'],
-  sold: ['sold'],
+  listed: ['live', 'available', 'listed', 'shopify listed', 'processed manually', 'not on shopify'],
+  sold: ['sold', 'sold out'],
   returned: ['returned'],
   scrapped: ['scrapped', 'scrap'],
   reserved: ['reserved'],
@@ -36,7 +39,7 @@ export function getInventoryLifecycleLabel(status: InventoryStatus): string {
     case 'available':
       return 'Non-Listed';
     case 'listed':
-      return 'Live';
+      return 'Listed';
     case 'sold':
       return 'Sold';
     case 'returned':
@@ -62,6 +65,7 @@ export function buildInventorySearchText(
     item.model,
     `${item.brand} ${item.model}`,
     item.deviceCode,
+    item.barcode || '',
     item.serialImei,
     item.category,
     item.storageLocation ?? '',
@@ -71,6 +75,8 @@ export function buildInventorySearchText(
     item.status,
     cfg?.label ?? '',
     getInventoryLifecycleLabel(item.status),
+    item.listingMethod === 'shopify' ? 'shopify listed' : '',
+    item.listingMethod === 'processed_manual' ? 'processed manually not on shopify' : '',
     ...(STATUS_SEARCH_ALIASES[item.status] ?? []),
     item.labelGenerated ? 'label generated' : 'label pending',
     extras?.saleCode ?? '',
@@ -96,6 +102,9 @@ export function filterInventoryByStatus(
   statusFilter: InventoryStatusFilter,
 ): boolean {
   if (statusFilter === 'all') return true;
+  if (statusFilter === 'shopify_listed') return item.status === 'listed' && item.listingMethod === 'shopify';
+  if (statusFilter === 'processed_manual') return item.status === 'listed' && item.listingMethod === 'processed_manual';
+  if (statusFilter === 'sold_out') return item.quantityOnHand <= 0 || item.status === 'sold';
   return item.status === statusFilter;
 }
 

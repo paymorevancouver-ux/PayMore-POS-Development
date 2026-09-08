@@ -11,6 +11,7 @@ export interface TitleGeneratorInput {
   brand: string;
   model: string;
   attributes?: Record<string, unknown>;
+  extraTitleText?: string;
 }
 
 function uniqueParts(parts: Array<string | undefined | null>): string[] {
@@ -42,7 +43,8 @@ export function generateShopifyTitle(input: TitleGeneratorInput): string {
     .map((field) => formatFieldValue(field, getAttributeValue(attributes, field.key)));
 
   const suffix = inferTitleSuffix(category, attributes);
-  return uniqueParts([brand, model, ...fromFields, suffix]).join(' ');
+  const extra = (input.extraTitleText || '').trim();
+  return uniqueParts([brand, model, ...fromFields, suffix, extra]).join(' ');
 }
 
 function inferTitleSuffix(category: SpecCategoryDefinition, attributes: Record<string, unknown>): string {

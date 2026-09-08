@@ -2,6 +2,14 @@ import type { ShopifyListingStatus } from '@/types/shopify';
 
 export const MAX_SHOPIFY_SELECTION = 10;
 
+export const MAX_SHOPIFY_PHOTOS = 12;
+
+export const SHOPIFY_PHOTO_SESSION_MINUTES = 30;
+
+export const SHOPIFY_PHOTO_MAX_EDGE_PX = 2800;
+
+export const SHOPIFY_TAXONOMY_SEARCH_DEBOUNCE_MS = 300;
+
 export const SHOPIFY_STATUS_LABELS: Record<ShopifyListingStatus, string> = {
   draft: 'Draft',
   ready: 'Ready',

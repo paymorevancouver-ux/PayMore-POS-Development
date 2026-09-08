@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyInventorySaleDeduction,
+  applyInventoryReturn,
   validateSaleQuantity,
 } from './inventorySale';
 
@@ -17,6 +18,30 @@ describe('validateSaleQuantity', () => {
 
   it('allows valid partial sale', () => {
     expect(validateSaleQuantity(1, 3).valid).toBe(true);
+  });
+});
+
+describe('applyInventoryReturn', () => {
+  it('Shopify-listed restock returns to Listed', () => {
+    const result = applyInventoryReturn(0, 1, 'sold', { listingMethod: 'shopify', sellable: true });
+    expect(result.quantityOnHand).toBe(1);
+    expect(result.status).toBe('listed');
+  });
+
+  it('processed_manual restock returns to Listed and is not Shopify', () => {
+    const result = applyInventoryReturn(0, 1, 'sold', { listingMethod: 'processed_manual', sellable: true });
+    expect(result.status).toBe('listed');
+  });
+
+  it('non-listed restock returns to Non-Listed (available)', () => {
+    const result = applyInventoryReturn(0, 1, 'sold', { listingMethod: null, sellable: true });
+    expect(result.status).toBe('available');
+  });
+
+  it('damaged return does not restore quantity', () => {
+    const result = applyInventoryReturn(0, 1, 'sold', { listingMethod: 'shopify', sellable: false });
+    expect(result.quantityOnHand).toBe(0);
+    expect(result.status).toBe('defective');
   });
 });
 

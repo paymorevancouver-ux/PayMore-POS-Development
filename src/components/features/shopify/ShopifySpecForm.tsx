@@ -106,7 +106,12 @@ export default function ShopifySpecForm({
   return (
     <Accordion type="multiple" defaultValue={['identification', 'condition']} className="space-y-2">
       {category.sections.map((section) => {
-        const fields = category.fields.filter((f) => f.section === section.id && fieldIsVisible(f, attributes));
+        const fields = category.fields.filter((f) => (
+          f.section === section.id
+          && fieldIsVisible(f, attributes)
+          && f.key !== 'cosmeticCondition'
+          && f.key !== 'functionalCondition'
+        ));
         if (!fields.length) return null;
         return (
           <AccordionItem key={section.id} value={section.id} className="border rounded-lg px-3 bg-card">

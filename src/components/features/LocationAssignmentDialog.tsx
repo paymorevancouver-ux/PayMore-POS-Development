@@ -85,12 +85,12 @@ export default function LocationAssignmentDialog({
             <p className="text-[10px] text-muted-foreground mt-0.5">{item.category}{item.serialImei ? ` · ${item.serialImei}` : ''}</p>
           </div>
 
-          {/* Workflow notice */}
+          {/* Location is independent of listing status. */}
           {!isMove && (
             <div className="flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
               <AlertCircle className="size-4 text-blue-600 shrink-0 mt-0.5" />
               <p className="text-[11px] text-blue-800 leading-snug">
-                <span className="font-semibold">Required:</span> Select a storage location before this item can be moved to Live Products.
+                Assign a rack and row so staff can find this item. Location does not change listing status.
               </p>
             </div>
           )}

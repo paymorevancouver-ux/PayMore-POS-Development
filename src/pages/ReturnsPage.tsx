@@ -28,6 +28,7 @@ import {
   type ReturnSearchResult,
 } from '@/lib/returnSaleSearch';
 import type { PaymentMethod, SaleTransaction, SaleItem } from '@/types';
+import { db } from '@/lib/database';
 
 const REFUND_METHODS: { value: PaymentMethod; label: string; icon: typeof CreditCard }[] = [
   { value: 'cash', label: 'Cash Refund', icon: DollarSign },
@@ -75,15 +76,27 @@ export default function ReturnsPage() {
   const [refundMethod, setRefundMethod] = useState<PaymentMethod>('cash');
   const [reason, setReason] = useState('Customer return');
   const [notes, setNotes] = useState('');
+  const [restockSellable, setRestockSellable] = useState(true);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(universalSearch), 300);
     return () => clearTimeout(timer);
   }, [universalSearch]);
 
+  useEffect(() => {
+    if (!store?.id) return;
+    db.getShopifySyncEvents(store.id).then((rows) => {
+      setShopifyRestocks(rows.filter((row) => {
+        const type = String((row as { event_type?: string }).event_type || '');
+        return type === 'SHOPIFY_ORDER_CANCELLED' || type === 'SHOPIFY_REFUND_RESTOCK';
+      }) as Array<Record<string, unknown>>);
+    });
+  }, [store?.id]);
+
   // ── History state ──
   const [historySearch, setHistorySearch] = useState('');
   const [showDetail, setShowDetail] = useState<string | null>(null);
+  const [shopifyRestocks, setShopifyRestocks] = useState<Array<Record<string, unknown>>>([]);
 
   // Derived data
   const foundSaleItems = foundSale ? pos.saleItems.filter((i) => i.salesTransactionId === foundSale.id) : [];
@@ -246,13 +259,12 @@ export default function ReturnsPage() {
     setStep('confirm');
   };
 
-  const handleProcessReturn = () => {
+  const handleProcessReturn = async () => {
     if (!foundSale || !employee || !store) return;
     if (!reason.trim()) { toast({ variant: 'destructive', title: 'Enter a return reason.' }); return; }
 
     // Process one return per selected item for proper audit trail
-    selectedItems.forEach((sel) => {
-      const saleItem = foundSaleItems.find((i) => i.id === sel.saleItemId);
+    for (const sel of selectedItems) {
       const retId = pos.createReturn({
         sourceTransactionType: 'sale',
         sourceTransactionId: foundSale.id,
@@ -260,12 +272,13 @@ export default function ReturnsPage() {
         customerId: foundSale.customerId,
         employeeId: employee.id,
         storeId: store.id,
-        reason: `${reason}${notes ? ` — ${notes}` : ''}`,
+        reason: `${reason}${notes ? ` — ${notes}` : ''}${restockSellable ? '' : ' — Damaged / not sellable'}`,
         returnAmount: sel.refundAmount,
         refundMethod,
+        restockSellable,
       });
-      pos.completeReturn(retId, employee.fullName, sel.quantity);
-    });
+      await pos.completeReturn(retId, employee.fullName, sel.quantity);
+    }
 
     toast({
       title: 'Return processed successfully',
@@ -278,6 +291,7 @@ export default function ReturnsPage() {
     setUniversalSearch('');
     setReason('Customer return');
     setNotes('');
+    setRestockSellable(true);
     setStep('search');
   };
 
@@ -287,6 +301,7 @@ export default function ReturnsPage() {
     setUniversalSearch('');
     setReason('Customer return');
     setNotes('');
+    setRestockSellable(true);
     setStep('search');
   };
 
@@ -819,6 +834,15 @@ export default function ReturnsPage() {
                           placeholder="Optional notes about this return…"
                         />
                       </div>
+                      <label className="flex items-start gap-2 rounded-lg border p-3 cursor-pointer">
+                        <Checkbox checked={restockSellable} onCheckedChange={(v) => setRestockSellable(v === true)} />
+                        <span className="text-[12px]">
+                          <span className="font-medium">Restock as sellable inventory</span>
+                          <span className="block text-[10px] text-muted-foreground mt-0.5">
+                            Uncheck for damaged, scrapped, or not-sellable returns. Shopify will not be reactivated.
+                          </span>
+                        </span>
+                      </label>
                     </div>
                   </CardContent>
                 </Card>
@@ -948,6 +972,32 @@ export default function ReturnsPage() {
                           </Button>
                         </div>
                       </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          {shopifyRestocks.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[12px] font-semibold">Shopify Cancellation / Refund restocks</p>
+              {shopifyRestocks.map((event) => {
+                const type = String(event.event_type || '');
+                const source = type === 'SHOPIFY_ORDER_CANCELLED' ? 'Shopify Cancellation' : 'Shopify Refund';
+                const inv = pos.inventory.find((i) => i.id === event.inventory_item_id);
+                return (
+                  <Card key={String(event.id)}>
+                    <CardContent className="pt-3 pb-3 flex items-center justify-between">
+                      <div>
+                        <Badge variant="outline" className="text-[9px]">{source}</Badge>
+                        <p className="text-[12px] font-medium mt-1">{inv ? `${inv.brand} ${inv.model}` : String(event.inventory_item_id || '')}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          POS qty {String(event.quantity_before ?? '—')} → {String(event.quantity_after ?? '—')}
+                          {event.shopify_order_id ? ` · Order ${String(event.shopify_order_id)}` : ''}
+                        </p>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">{event.created_at ? formatDateTime(String(event.created_at)) : ''}</p>
                     </CardContent>
                   </Card>
                 );

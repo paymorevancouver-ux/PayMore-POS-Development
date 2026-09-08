@@ -259,7 +259,7 @@ export default function LabelGeneratorPage() {
             <SelectContent>
               <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="available">Not Listed</SelectItem>
-              <SelectItem value="listed">Live Products</SelectItem>
+              <SelectItem value="listed">Listed Products</SelectItem>
               <SelectItem value="returned">Returned</SelectItem>
             </SelectContent>
           </Select>

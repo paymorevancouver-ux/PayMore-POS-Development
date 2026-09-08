@@ -2,8 +2,8 @@
 export type EmployeeRole = 'admin' | 'manager' | 'cashier' | 'buyer';
 export type DeviceCondition = 'mint' | 'new' | 'open-box' | 'excellent' | 'very-good' | 'good' | 'fair' | 'poor' | 'for-parts';
 export type TaxMode = 'both' | 'gst-only' | 'pst-only' | 'exempt';
-export type PaymentMethod = 'cash' | 'debit' | 'credit' | 'etransfer' | 'store-credit' | 'other';
-export type SalesChannel = 'in-store' | 'online' | 'phone' | 'marketplace';
+export type PaymentMethod = 'cash' | 'debit' | 'credit' | 'etransfer' | 'store-credit' | 'other' | 'shopify';
+export type SalesChannel = 'in-store' | 'online' | 'phone' | 'marketplace' | 'shopify';
 export type InventoryStatus = 'available' | 'listed' | 'sold' | 'reserved' | 'returned' | 'defective' | 'scrapped';
 export type VisitType = 'buy' | 'sell' | 'browse' | 'return';
 export type BuyItemStatus = 'pending' | 'deal' | 'no-deal' | 'completed';
@@ -169,6 +169,7 @@ export interface InventoryItem {
   brand: string;
   model: string;
   serialImei: string;
+  barcode?: string | null;
   quantityOnHand: number;
   costPerUnit: number;
   expectedSalePrice: number;
@@ -188,6 +189,9 @@ export interface InventoryItem {
   labelPrintCount: number;
   lastLabelPrintAt: string | null;
   lastLabelPrintBy: string | null;
+  listingMethod?: 'shopify' | 'processed_manual' | null;
+  processedAt?: string | null;
+  processedByEmployeeId?: string | null;
   specifications?: DeviceSpecifications;
   listingTitle?: string;
 }
@@ -222,6 +226,11 @@ export interface SaleTransaction {
   status: SaleStatus;
   createdAt: string;
   completedAt: string | null;
+  shopifyOrderId?: string | null;
+  shopifyOrderName?: string | null;
+  shopifyCustomerName?: string | null;
+  shopifyCustomerEmail?: string | null;
+  shopifyOrderUrl?: string | null;
 }
 
 // ── Sale Item ──
@@ -258,6 +267,7 @@ export interface Return {
   returnAmount: number;
   refundMethod: PaymentMethod;
   status: ReturnStatus;
+  restockSellable?: boolean;
   createdAt: string;
   completedAt: string | null;
 }

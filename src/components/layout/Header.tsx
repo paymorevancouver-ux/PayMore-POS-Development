@@ -11,6 +11,7 @@ const TITLES: Record<string, string> = {
   '/pos/drawer': 'Cash Drawer',
   '/pos/inventory': 'Inventory Management',
   '/pos/shopify-lister': 'Shopify Auto Lister',
+  '/pos/shopify-sync': 'Shopify Sync',
   '/pos/sales': 'New Sale',
   '/pos/sales/history': 'Sales History',
   '/pos/returns': 'Returns',

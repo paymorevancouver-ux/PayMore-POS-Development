@@ -15,7 +15,7 @@ import {
   Search, Plus, Package, Tag, ShoppingCart,
   RotateCcw, Trash2, Eye, Edit2, Archive,
   CheckCircle2, Ban, MapPin, AlertCircle, Printer, History, ArrowRight,
-  LayoutList, ArrowUpDown, ArrowUp, ArrowDown,
+  LayoutList, ArrowUpDown, ArrowUp, ArrowDown, Store, ExternalLink,
 } from 'lucide-react';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/taxCalc';
 import {
@@ -31,15 +31,20 @@ import { CATEGORIES, INVENTORY_STATUSES } from '@/constants/config';
 import BarcodeLabelDialog from '@/components/features/BarcodeLabelDialog';
 import LocationAssignmentDialog from '@/components/features/LocationAssignmentDialog';
 import InventorySpecsEditor from '@/components/features/InventorySpecsEditor';
+import MarkProcessedDialog from '@/components/features/MarkProcessedDialog';
 import { flattenSpecsForDisplay, includedAccessories } from '@/lib/deviceSpecs';
+import { listingMethodOf, resolveListingMethod } from '@/lib/inventoryLifecycle';
+import { nonListedEmployeeActions } from '@/lib/shopify/eligibility';
+import { collectTakenBarcodes, generateRetailBarcode } from '@/lib/shopify/retailBarcode';
+import { useShopifyListerStore } from '@/stores/shopifyListerStore';
 import type { InventoryStatus, InventoryItem, LocationHistoryEntry } from '@/types';
 
 type Section = 'all' | 'non-listed' | 'available' | 'sold' | 'returned' | 'scrapped';
 
 const SECTIONS: { key: Section; label: string; icon: typeof Package; description: string }[] = [
   { key: 'all', label: 'All Inventory', icon: LayoutList, description: 'View and search every item across all inventory statuses' },
-  { key: 'non-listed', label: 'Not Listed', icon: Package, description: 'Received items not yet on the floor' },
-  { key: 'available', label: 'Live Products', icon: CheckCircle2, description: 'Ready for sale on the floor' },
+  { key: 'non-listed', label: 'Non-Listed', icon: Package, description: 'Holding-complete items awaiting Shopify listing or manual processing' },
+  { key: 'available', label: 'Listed Products', icon: CheckCircle2, description: 'Shopify-listed and manually processed items ready for sale' },
   { key: 'sold', label: 'Sold Items', icon: ShoppingCart, description: 'Completed sales' },
   { key: 'returned', label: 'Returned Items', icon: RotateCcw, description: 'Items returned by customers' },
   { key: 'scrapped', label: 'Scrapped Items', icon: Ban, description: 'Damaged, unusable, discarded' },
@@ -55,9 +60,53 @@ function getStatusBadge(status: InventoryStatus, lifecycleLabel = false) {
   );
 }
 
+function ListingMethodBadges({
+  item,
+  shopifyUrl,
+  shopifyStatus,
+  inferredMethod,
+}: {
+  item: InventoryItem;
+  shopifyUrl?: string | null;
+  shopifyStatus?: string | null;
+  inferredMethod?: ReturnType<typeof listingMethodOf>;
+}) {
+  if (item.status !== 'listed') return null;
+  const method = listingMethodOf(item) || inferredMethod || null;
+  if (method === 'shopify') {
+    return (
+      <div className="flex flex-col gap-0.5 mt-0.5">
+        <span className="text-[9px] font-semibold px-2 py-0.5 rounded-full border text-emerald-800 bg-emerald-50 border-emerald-200 w-fit">
+          Shopify Listed
+        </span>
+        {shopifyStatus && (
+          <span className="text-[9px] text-muted-foreground">{shopifyStatus}</span>
+        )}
+        {shopifyUrl && (
+          <a href={shopifyUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] text-blue-700 underline w-fit">
+            Open Shopify
+          </a>
+        )}
+      </div>
+    );
+  }
+  if (method === 'processed_manual') {
+    return (
+      <div className="flex flex-col gap-0.5 mt-0.5">
+        <span className="text-[9px] font-semibold px-2 py-0.5 rounded-full border text-slate-700 bg-slate-50 border-slate-200 w-fit">
+          Processed Manually
+        </span>
+        <span className="text-[9px] text-muted-foreground">Not on Shopify</span>
+      </div>
+    );
+  }
+  return null;
+}
+
 export default function InventoryPage() {
   const { employee, store } = useAuthStore();
   const pos = usePosStore();
+  const shopify = useShopifyListerStore();
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -75,16 +124,11 @@ export default function InventoryPage() {
   const [showSpecsEdit, setShowSpecsEdit] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [locHistory, setLocHistory] = useState<LocationHistoryEntry[]>([]);
-
-  // ── Workflow state ──
-  // Track which item is being marked as listed (workflow context)
-  const [pendingListItem, setPendingListItem] = useState<InventoryItem | null>(null);
-  // Location dialog
   const [locationDialogItem, setLocationDialogItem] = useState<InventoryItem | null>(null);
   const [locationDialogMode, setLocationDialogMode] = useState<'assign' | 'move'>('assign');
-  // Label dialog
   const [labelDialogItem, setLabelDialogItem] = useState<InventoryItem | null>(null);
-  const [labelDialogMarkListed, setLabelDialogMarkListed] = useState(false);
+  const [processedItem, setProcessedItem] = useState<InventoryItem | null>(null);
+  const [processedSuccess, setProcessedSuccess] = useState(false);
 
   // Add form
   const [form, setForm] = useState({
@@ -226,6 +270,29 @@ export default function InventoryPage() {
     }
   }, [showDetail, showHistory, pos]);
 
+  useEffect(() => {
+    if (store?.id) void shopify.load(store.id);
+  }, [store?.id]);
+
+  const shopifyListingByInventoryId = useMemo(() => {
+    const map = new Map<string, (typeof shopify.listings)[number]>();
+    for (const listing of shopify.listings) {
+      const existing = map.get(listing.inventoryItemId);
+      if (!existing) {
+        map.set(listing.inventoryItemId, listing);
+        continue;
+      }
+      const rank = (status: string) => (status === 'active' ? 3 : status === 'publishing' ? 2 : 1);
+      if (rank(listing.status) >= rank(existing.status)) map.set(listing.inventoryItemId, listing);
+    }
+    return map;
+  }, [shopify.listings]);
+
+  const listingMethodFor = (item: InventoryItem) => resolveListingMethod({
+    item,
+    shopifyListings: shopify.listings.filter((row) => row.inventoryItemId === item.id),
+  });
+
   // ── Handlers ──
 
   const handleAdd = () => {
@@ -236,73 +303,123 @@ export default function InventoryPage() {
     pos.logAction(employee.id, employee.fullName, 'Inventory', 'INVENTORY_ADD', 'inventory', '', `Added ${form.brand} ${form.model} manually`);
     setShowAdd(false);
     setForm({ category: 'Smartphones', brand: '', model: '', serialImei: '', quantityOnHand: 1, costPerUnit: 0, expectedSalePrice: 0, notes: '' });
-    toast({ title: 'Item added to Not Listed' });
+    toast({ title: 'Item added to Non-Listed' });
   };
 
-  /**
-   * Workflow: Mark Available (move to Live Products)
-   * Requires: Storage Location + Generated Label
-   */
-  const handleMarkAvailable = (item: InventoryItem) => {
-    setPendingListItem(item);
-    if (!item.storageLocation) {
-      // Step 1: Assign location first
-      setLocationDialogItem(item);
-      setLocationDialogMode('assign');
-    } else if (!item.labelGenerated) {
-      // Step 2: Generate label
-      setLabelDialogItem(item);
-      setLabelDialogMarkListed(true);
-    } else {
-      // Both already set — just move to listed
-      handleDirectListing(item);
+  const itemActions = (item: InventoryItem) => nonListedEmployeeActions({
+    inventory: item,
+    listings: shopify.listings,
+    holdingPeriodDays: shopify.holdingPeriodDays,
+  });
+
+  const handleOpenInAutoLister = async (item: InventoryItem) => {
+    if (!store || !employee) return;
+    const actions = itemActions(item);
+    if (!actions.openInAutoLister) {
+      toast({
+        variant: 'destructive',
+        title: 'Cannot open in Auto Lister',
+        description: actions.eligibility.reason || actions.holding.label,
+      });
+      return;
     }
+    await shopify.load(store.id);
+    const result = await shopify.createDrafts({
+      storeId: store.id,
+      employeeId: employee.id,
+      items: [item],
+      purchaseItems: pos.purchaseItems,
+    });
+    if (result.blocked[0] && result.created.length === 0 && result.continued.length === 0) {
+      toast({ variant: 'destructive', title: 'Cannot open in Auto Lister', description: result.blocked[0].message });
+      return;
+    }
+    navigate('/pos/shopify-lister');
   };
 
-  const handleDirectListing = (item: InventoryItem) => {
+  const handleAskMarkProcessed = (item: InventoryItem) => {
+    setProcessedItem(item);
+    setProcessedSuccess(false);
+  };
+
+  const handleConfirmProcessed = () => {
+    if (!processedItem || !employee) {
+      toast({ variant: 'destructive', title: 'A logged-in employee is required.' });
+      return;
+    }
+    const extras: Partial<InventoryItem> = {};
+    if (!processedItem.barcode) {
+      try {
+        const taken = collectTakenBarcodes({
+          inventory: pos.inventory,
+          listings: shopify.listings,
+          exceptInventoryId: processedItem.id,
+        });
+        extras.barcode = generateRetailBarcode({
+          deviceCode: processedItem.deviceCode,
+          inventoryId: processedItem.id,
+          taken,
+        });
+      } catch {
+        // Label generation can still create a barcode later.
+      }
+    }
+    const ok = pos.markInventoryProcessed(processedItem.id, employee.id, employee.fullName, extras);
+    if (!ok) {
+      toast({ variant: 'destructive', title: 'This item cannot be marked as processed.' });
+      return;
+    }
+    const updated = usePosStore.getState().inventory.find((row) => row.id === processedItem.id) || {
+      ...processedItem,
+      ...extras,
+      status: 'listed' as const,
+      listingMethod: 'processed_manual' as const,
+    };
+    setProcessedItem(updated);
+    setProcessedSuccess(true);
+  };
+
+  const handleReturnToNonListed = (item: InventoryItem) => {
     if (!employee) return;
-    pos.updateInventoryItem(item.id, { status: 'listed' });
-    pos.logAction(employee.id, employee.fullName, 'Inventory', 'MARK_AVAILABLE', 'inventory', item.id,
-      `${item.brand} ${item.model} (${item.deviceCode}) — moved to Live Products at ${item.storageLocation}`);
-    toast({ title: 'Moved to Live Products', description: item.deviceCode });
-    setPendingListItem(null);
+    pos.updateInventoryItem(item.id, {
+      status: 'available',
+      listingMethod: null,
+      processedAt: null,
+      processedByEmployeeId: null,
+      soldAt: null,
+      quantityOnHand: Math.max(1, item.quantityOnHand),
+    });
+    pos.logAction(
+      employee.id, employee.fullName, 'Inventory', 'MARK_NON_LISTED', 'inventory', item.id,
+      `${item.brand} ${item.model} — returned to Non-Listed`,
+    );
+    toast({ title: 'Returned to Non-Listed', description: item.deviceCode });
   };
 
-  /** Location dialog onSave handler */
   const handleLocationSaved = (location: string, rack: string, row: string, notes: string) => {
     if (!locationDialogItem || !employee) return;
     pos.assignInventoryLocation(locationDialogItem.id, location, rack, row, employee.id, employee.fullName, notes);
-    const updatedItem = { ...locationDialogItem, storageLocation: location, storageRack: rack, storageRow: row };
     setLocationDialogItem(null);
-
-    // If in workflow context, continue to label step
-    if (pendingListItem && pendingListItem.id === locationDialogItem.id && locationDialogMode === 'assign') {
-      setLabelDialogItem(updatedItem);
-      setLabelDialogMarkListed(true);
-    } else {
-      toast({ title: locationDialogMode === 'move' ? `Moved to ${location}` : `Location set to ${location}` });
-    }
+    toast({ title: locationDialogMode === 'move' ? `Moved to ${location}` : `Location set to ${location}` });
   };
 
-  /** Label dialog onClose handler — clears pending workflow */
   const handleLabelDialogClose = (open: boolean) => {
-    if (!open) {
-      setLabelDialogItem(null);
-      setLabelDialogMarkListed(false);
-      setPendingListItem(null);
-    }
+    if (!open) setLabelDialogItem(null);
   };
 
   const handleOpenLabel = (item: InventoryItem) => {
     setLabelDialogItem(item);
-    setLabelDialogMarkListed(false);
-    setPendingListItem(null);
   };
 
   const handleMoveLocation = (item: InventoryItem) => {
     setLocationDialogItem(item);
     setLocationDialogMode('move');
-    setPendingListItem(null);
+  };
+
+  const handleOpenShopify = (item: InventoryItem) => {
+    const listing = shopifyListingByInventoryId.get(item.id);
+    const url = listing?.shopifyAdminUrl || listing?.shopifyUrl;
+    if (url) window.open(url, '_blank', 'noopener');
   };
 
   const handleStatusChange = (item: InventoryItem, newStatus: InventoryStatus) => {
@@ -315,9 +432,11 @@ export default function InventoryPage() {
     } else if (newStatus === 'available') {
       updates.soldAt = null;
       updates.quantityOnHand = 1;
+      updates.listingMethod = null;
+      updates.processedAt = null;
+      updates.processedByEmployeeId = null;
     } else if (newStatus === 'listed') {
-      // This should go through the workflow — redirect
-      handleMarkAvailable(item);
+      handleAskMarkProcessed(item);
       return;
     } else if (newStatus === 'scrapped') {
       updates.quantityOnHand = 0;
@@ -336,7 +455,7 @@ export default function InventoryPage() {
       sold: 'Sold Items',
       returned: 'Returned Items',
       scrapped: 'Scrapped Items',
-      available: 'Not Listed',
+      available: 'Non-Listed',
     };
 
     pos.logAction(
@@ -418,24 +537,37 @@ export default function InventoryPage() {
   };
 
   const renderActions = (item: InventoryItem) => {
-    const needsSetup = !item.storageLocation || !item.labelGenerated;
     const ctx = getActionContext(item);
     switch (ctx) {
-      case 'non-listed':
+      case 'non-listed': {
+        const actions = itemActions(item);
         return (
           <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="default"
-              className="h-7 text-[10px] px-2.5"
-              onClick={() => handleMarkAvailable(item)}
-              title="Move to Live Products (requires location + label)"
-            >
-              <Tag className="size-3 mr-1" />Mark as Listed
-            </Button>
-            {needsSetup && (
+            {actions.openInAutoLister && (
+              <Button
+                size="sm"
+                variant="default"
+                className="h-7 text-[10px] px-2.5"
+                onClick={() => void handleOpenInAutoLister(item)}
+                title="Open in Shopify Auto Lister"
+              >
+                <Store className="size-3 mr-1" />Open in Auto Lister
+              </Button>
+            )}
+            {actions.markAsProcessed && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-[10px] px-2.5"
+                onClick={() => handleAskMarkProcessed(item)}
+                title="Mark as processed without listing on Shopify"
+              >
+                <CheckCircle2 className="size-3 mr-1" />Mark as Processed
+              </Button>
+            )}
+            {!actions.openInAutoLister && !actions.markAsProcessed && (
               <Badge variant="outline" className="text-[8px] text-amber-700 bg-amber-50 border-amber-200">
-                <AlertCircle className="size-2.5 mr-0.5" />Setup
+                {actions.holding.completed ? (actions.eligibility.reason || 'Not eligible') : actions.holding.label}
               </Badge>
             )}
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openDetail(item)}>
@@ -443,13 +575,32 @@ export default function InventoryPage() {
             </Button>
           </div>
         );
-      case 'available':
+      }
+      case 'available': {
+        const listing = shopifyListingByInventoryId.get(item.id);
+        const method = listingMethodFor(item);
+        const shopifyListed = method === 'shopify' || listing?.status === 'active';
+        const manualListed = method === 'processed_manual' || (!shopifyListed && item.status === 'listed');
         return (
           <div className="flex items-center gap-0.5">
-            <Button size="sm" variant="outline" className="h-7 text-[10px] px-2"
-              onClick={() => handleOpenLabel(item)} title="Print Label">
-              <Printer className="size-3 mr-0.5" />Label
-            </Button>
+            {shopifyListed && (listing?.shopifyAdminUrl || listing?.shopifyUrl) && (
+              <Button size="sm" variant="outline" className="h-7 text-[10px] px-2"
+                onClick={() => handleOpenShopify(item)} title="Open Shopify listing">
+                <ExternalLink className="size-3 mr-0.5" />Shopify
+              </Button>
+            )}
+            {shopifyListed && (
+              <Button size="sm" variant="ghost" className="h-7 text-[10px] px-2"
+                onClick={() => handleOpenLabel(item)} title="Reprint label">
+                <Printer className="size-3 mr-0.5" />Print Label
+              </Button>
+            )}
+            {manualListed && !shopifyListed && (
+              <Button size="sm" variant="outline" className="h-7 text-[10px] px-2"
+                onClick={() => handleOpenLabel(item)} title={item.labelGenerated ? 'Print Label' : 'Generate Label'}>
+                <Tag className="size-3 mr-0.5" />{item.labelGenerated ? 'Print Label' : 'Generate Label'}
+              </Button>
+            )}
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
               onClick={() => handleMoveLocation(item)} title="Move Storage Location">
               <MapPin className="size-3.5" />
@@ -459,6 +610,7 @@ export default function InventoryPage() {
             </Button>
           </div>
         );
+      }
       case 'sold':
         return (
           <div className="flex items-center gap-0.5">
@@ -475,7 +627,7 @@ export default function InventoryPage() {
       case 'returned':
         return (
           <div className="flex items-center gap-1">
-            <Button size="sm" variant="outline" className="h-7 text-[10px] px-2 text-emerald-700 border-emerald-200 hover:bg-emerald-50" onClick={() => handleMarkAvailable(item)}>
+            <Button size="sm" variant="outline" className="h-7 text-[10px] px-2 text-emerald-700 border-emerald-200 hover:bg-emerald-50" onClick={() => handleReturnToNonListed(item)}>
               <Tag className="size-3 mr-1" />Re-list
             </Button>
             <Button size="sm" variant="outline" className="h-7 text-[10px] px-2 text-red-700 border-red-200 hover:bg-red-50" onClick={() => handleStatusChange(item, 'scrapped')}>
@@ -645,11 +797,14 @@ export default function InventoryPage() {
               </div>
               {isAllSection && (
                 <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as InventoryStatusFilter)}>
-                  <SelectTrigger className="h-9 w-36 text-[11px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                  <SelectTrigger className="h-9 w-44 text-[11px]"><SelectValue placeholder="Status" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
                     <SelectItem value="available">Non-Listed</SelectItem>
-                    <SelectItem value="listed">Live</SelectItem>
+                    <SelectItem value="listed">Listed</SelectItem>
+                    <SelectItem value="shopify_listed">Shopify Listed</SelectItem>
+                    <SelectItem value="processed_manual">Processed Manually</SelectItem>
+                    <SelectItem value="sold_out">Sold Out</SelectItem>
                     <SelectItem value="sold">Sold</SelectItem>
                     <SelectItem value="returned">Returned</SelectItem>
                     <SelectItem value="scrapped">Scrapped</SelectItem>
@@ -797,7 +952,17 @@ export default function InventoryPage() {
                         {activeSection === 'sold' && !isAllSection && (
                           <TableCell className="text-[11px] truncate max-w-[120px]">{soldInfo?.customer || '—'}</TableCell>
                         )}
-                        <TableCell>{getStatusBadge(item.status, isAllSection)}</TableCell>
+                        <TableCell>
+                          <div>
+                            {getStatusBadge(item.status, isAllSection)}
+                            <ListingMethodBadges
+                              item={item}
+                              inferredMethod={listingMethodFor(item)}
+                              shopifyUrl={shopifyListingByInventoryId.get(item.id)?.shopifyAdminUrl || shopifyListingByInventoryId.get(item.id)?.shopifyUrl}
+                              shopifyStatus={shopifyListingByInventoryId.get(item.id)?.status === 'active' ? 'Active on Shopify' : shopifyListingByInventoryId.get(item.id)?.status === 'publishing' ? 'Publishing' : null}
+                            />
+                          </div>
+                        </TableCell>
                         <TableCell className="text-[11px] text-muted-foreground">
                           {activeSection === 'sold' && soldInfo && !isAllSection
                             ? formatDate(soldInfo.soldDate)
@@ -815,7 +980,7 @@ export default function InventoryPage() {
                         <p className="text-[11px] text-muted-foreground mt-1">
                           {activeSection === 'all' && 'No inventory records match your search or filters.'}
                           {activeSection === 'non-listed' && 'Items received from purchases will appear here.'}
-                          {activeSection === 'available' && 'Items moved to Live Products will appear here.'}
+                          {activeSection === 'available' && 'Shopify-listed and manually processed items will appear here.'}
                           {activeSection === 'sold' && 'Completed sales will move items here.'}
                           {activeSection === 'returned' && 'Returned items will appear here.'}
                           {activeSection === 'scrapped' && 'Scrapped and damaged items will appear here.'}
@@ -867,25 +1032,38 @@ export default function InventoryPage() {
               <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="mt-1 h-9 text-[12px]" />
             </div>
           </div>
-          <Button onClick={handleAdd} className="mt-3 w-full h-10">Add to Not Listed</Button>
+          <Button onClick={handleAdd} className="mt-3 w-full h-10">Add to Non-Listed</Button>
         </DialogContent>
       </Dialog>
 
       {/* ═══ LOCATION ASSIGNMENT / MOVE DIALOG ═══ */}
       <LocationAssignmentDialog
         open={!!locationDialogItem}
-        onOpenChange={(o) => { if (!o) { setLocationDialogItem(null); if (locationDialogMode === 'assign') setPendingListItem(null); } }}
+        onOpenChange={(o) => { if (!o) setLocationDialogItem(null); }}
         item={locationDialogItem}
         mode={locationDialogMode}
         onSave={handleLocationSaved}
       />
 
-      {/* ═══ BARCODE LABEL DIALOG ═══ */}
       <BarcodeLabelDialog
         open={!!labelDialogItem}
         onOpenChange={handleLabelDialogClose}
         item={labelDialogItem}
-        markAsListedOnGenerate={labelDialogMarkListed}
+      />
+
+      <MarkProcessedDialog
+        open={!!processedItem}
+        item={processedItem}
+        success={processedSuccess}
+        onOpenChange={(open) => { if (!open) { setProcessedItem(null); setProcessedSuccess(false); } }}
+        onConfirm={handleConfirmProcessed}
+        onGenerateLabel={() => {
+          if (!processedItem) return;
+          setLabelDialogItem(processedItem);
+          setProcessedItem(null);
+          setProcessedSuccess(false);
+        }}
+        onDone={() => { setProcessedItem(null); setProcessedSuccess(false); }}
       />
 
       {/* ═══ ITEM DETAIL / EDIT DIALOG ═══ */}
@@ -909,7 +1087,15 @@ export default function InventoryPage() {
                   </div>
                   <div className="bg-secondary/50 rounded-lg p-3">
                     <p className="text-[9px] text-muted-foreground uppercase font-semibold mb-0.5">Status</p>
-                    <div className="mt-0.5">{getStatusBadge(showDetail.status)}</div>
+                    <div className="mt-0.5">
+                      {getStatusBadge(showDetail.status)}
+                      <ListingMethodBadges
+                        item={showDetail}
+                        inferredMethod={listingMethodFor(showDetail)}
+                        shopifyUrl={shopifyListingByInventoryId.get(showDetail.id)?.shopifyAdminUrl || shopifyListingByInventoryId.get(showDetail.id)?.shopifyUrl}
+                        shopifyStatus={shopifyListingByInventoryId.get(showDetail.id)?.status === 'active' ? 'Active on Shopify' : shopifyListingByInventoryId.get(showDetail.id)?.status === 'publishing' ? 'Publishing' : null}
+                      />
+                    </div>
                   </div>
                   <div className="bg-secondary/50 rounded-lg p-3">
                     <p className="text-[9px] text-muted-foreground uppercase font-semibold mb-0.5">Category</p>
@@ -964,6 +1150,8 @@ export default function InventoryPage() {
                           Print / Reprint →
                         </button>
                       </>
+                    ) : listingMethodFor(showDetail) === 'shopify' ? (
+                      <p className="text-[11px] text-slate-600 font-medium">Offered after Shopify publish</p>
                     ) : (
                       <>
                         <p className="text-[11px] text-slate-600 font-medium mb-1">Not generated</p>
@@ -1123,24 +1311,51 @@ export default function InventoryPage() {
                           </Button>
                         </>
                       )}
-                      {showDetail.status === 'available' && (
-                        <Button size="sm" className="h-8 text-[11px]" onClick={() => { handleMarkAvailable(showDetail); setShowDetail(null); }}>
-                          <Tag className="size-3 mr-1.5" />Mark as Listed
-                        </Button>
-                      )}
-                      {showDetail.status === 'listed' && (
+                      {showDetail.status === 'available' && (() => {
+                        const actions = itemActions(showDetail);
+                        return (
+                          <>
+                            {actions.openInAutoLister && (
+                              <Button size="sm" className="h-8 text-[11px]" onClick={() => { void handleOpenInAutoLister(showDetail); setShowDetail(null); }}>
+                                <Store className="size-3 mr-1.5" />Open in Auto Lister
+                              </Button>
+                            )}
+                            {actions.markAsProcessed && (
+                              <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => { handleAskMarkProcessed(showDetail); setShowDetail(null); }}>
+                                <CheckCircle2 className="size-3 mr-1.5" />Mark as Processed
+                              </Button>
+                            )}
+                          </>
+                        );
+                      })()}
+                      {showDetail.status === 'listed' && (() => {
+                        const method = listingMethodFor(showDetail);
+                        return (
                         <>
-                          <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => handleOpenLabel(showDetail)}>
-                            <Printer className="size-3 mr-1.5" />Print Label
-                          </Button>
+                          {method === 'shopify' && (
+                            <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => handleOpenShopify(showDetail)}>
+                              <ExternalLink className="size-3 mr-1.5" />Open Shopify
+                            </Button>
+                          )}
+                          {method === 'processed_manual' && (
+                            <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => handleOpenLabel(showDetail)}>
+                              <Tag className="size-3 mr-1.5" />{showDetail.labelGenerated ? 'Print Label' : 'Generate Label'}
+                            </Button>
+                          )}
+                          {method === 'shopify' && showDetail.labelGenerated && (
+                            <Button size="sm" variant="ghost" className="h-8 text-[11px]" onClick={() => handleOpenLabel(showDetail)}>
+                              <Printer className="size-3 mr-1.5" />Print Label
+                            </Button>
+                          )}
                           <Button size="sm" variant="outline" className="h-8 text-[11px]" onClick={() => handleMoveLocation(showDetail)}>
                             <MapPin className="size-3 mr-1.5" />Move Location
                           </Button>
                         </>
-                      )}
+                        );
+                      })()}
                       {showDetail.status === 'returned' && (
                         <>
-                          <Button size="sm" variant="outline" className="h-8 text-[11px] text-emerald-700" onClick={() => { handleMarkAvailable(showDetail); setShowDetail(null); }}>
+                          <Button size="sm" variant="outline" className="h-8 text-[11px] text-emerald-700" onClick={() => { handleReturnToNonListed(showDetail); setShowDetail(null); }}>
                             <Tag className="size-3 mr-1.5" />Re-list
                           </Button>
                           <Button size="sm" variant="outline" className="h-8 text-[11px] text-red-700" onClick={() => { handleStatusChange(showDetail, 'scrapped'); setShowDetail(null); }}>

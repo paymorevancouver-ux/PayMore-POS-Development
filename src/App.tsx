@@ -8,6 +8,7 @@ import AppShell from '@/components/layout/AppShell';
 import ProtectedRoute from '@/components/features/ProtectedRoute';
 import LoginPage from '@/pages/LoginPage';
 import IdUploadPage from '@/pages/IdUploadPage';
+import ShopifyPhotoUploadPage from '@/pages/ShopifyPhotoUploadPage';
 import DashboardPage from '@/pages/DashboardPage';
 import CustomerVisitPage from '@/pages/CustomerVisitPage';
 import CustomersPage from '@/pages/CustomersPage';
@@ -27,6 +28,7 @@ import AuditPage from '@/pages/AuditPage';
 import UserManagementPage from '@/pages/UserManagementPage';
 import ShopifyListerPage from '@/pages/ShopifyListerPage';
 import ShopifyListingEditorPage from '@/pages/ShopifyListingEditorPage';
+import ShopifySyncPage from '@/pages/ShopifySyncPage';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -103,6 +105,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/id-upload/:token" element={<IdUploadPage />} />
+        <Route path="/shopify-photo-upload/:token" element={<ShopifyPhotoUploadPage />} />
         <Route path="/shopify-lister" element={<Navigate to="/pos/shopify-lister" replace />} />
         <Route
           path="/pos"
@@ -122,6 +125,7 @@ export default function App() {
           <Route path="inventory" element={<ProtectedRoute requiredModule="inventory"><InventoryPage /></ProtectedRoute>} />
           <Route path="shopify-lister" element={<ProtectedRoute requiredModule="shopify-lister"><ShopifyListerPage /></ProtectedRoute>} />
           <Route path="shopify-lister/:listingId" element={<ProtectedRoute requiredModule="shopify-lister"><ShopifyListingEditorPage /></ProtectedRoute>} />
+          <Route path="shopify-sync" element={<ProtectedRoute requiredModule="shopify-lister"><ShopifySyncPage /></ProtectedRoute>} />
           <Route path="labels" element={<ProtectedRoute requiredModule="labels"><LabelGeneratorPage /></ProtectedRoute>} />
           <Route path="sales" element={<ProtectedRoute requiredModule="sales"><SalesPage /></ProtectedRoute>} />
           <Route path="sales/history" element={<ProtectedRoute requiredModule="sales"><SalesHistoryPage /></ProtectedRoute>} />

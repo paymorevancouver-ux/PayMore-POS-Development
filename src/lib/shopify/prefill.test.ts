@@ -73,10 +73,16 @@ describe('draft persistence helpers', () => {
     expect(draft.quantity).toBe(1);
     expect(draft.shopifyVendor).toBe('Apple');
     expect(draft.shopifyProductType).toBe('Smartphone');
+    expect(draft.shopifyCategoryId).toBeNull();
+    expect(draft.shopifyCategoryConfirmed).toBe(false);
     expect(draft.photos).toEqual(['data:image/jpeg;base64,AAA']);
     expect(draft.attributes.color).toBe('Natural Titanium');
     expect(draft.title).toContain('iPhone 15 Pro');
-    expect(draft.description).toContain('Product Overview');
+    expect(draft.description).toContain('Items included in this sale:');
+    expect(draft.accessories.some((a) => a.id === 'device' && a.included)).toBe(true);
+    expect(draft.cosmeticConditionKey).toBe('VERY_GOOD');
+    expect(draft.description).not.toContain('356789012345678');
+    expect(draft.description.toLowerCase()).not.toContain('cost');
   });
 
   it('keeps identity fields when applying later edits', () => {
@@ -95,5 +101,22 @@ describe('draft persistence helpers', () => {
     expect(saved.price).toBe(750);
     expect(saved.updatedAt).toBe('2026-08-30T13:00:00.000Z');
     expect(saved.photos).toEqual(draft.photos);
+  });
+
+  it('does not use IMEI or serial as the listing barcode and keeps SKU as device code', () => {
+    const draft = buildDraftListing({
+      id: 'SFL-2',
+      storeId: 'STR-001',
+      employeeId: 'EMP-1',
+      inventory: {
+        ...inventory,
+        barcode: '',
+        serialImei: '356789012345678',
+        specifications: { upcSku: '356789012345678' },
+      },
+      now: '2026-08-30T12:00:00.000Z',
+    });
+    expect(draft.sku).toBe('BC05-000846');
+    expect(draft.barcode).toBe('');
   });
 });

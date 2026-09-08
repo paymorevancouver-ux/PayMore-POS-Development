@@ -3,13 +3,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  Printer, Download, Package, MapPin, CheckCircle2, Tag, RefreshCw, Loader2, AlertCircle,
+  Printer, Download, Package, MapPin, CheckCircle2, Tag, RefreshCw, Loader2,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { usePosStore } from '@/stores/posStore';
 import { useToast } from '@/hooks/use-toast';
 import {
-  buildProductCode, buildDescription, generateBarcodeSvg,
+  buildDescription, generateBarcodeSvg, labelBarcodeValue, labelHeadline,
   printLabels, downloadLabelsPdf,
 } from '@/lib/barcode';
 import { formatDateTime } from '@/lib/taxCalc';
@@ -19,14 +19,12 @@ interface BarcodeLabelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   item: InventoryItem | null;
-  /** If true, generating a label will also mark item as 'listed' (workflow context) */
-  markAsListedOnGenerate?: boolean;
   /** Called after label is successfully generated */
   onGenerated?: () => void;
 }
 
 export default function BarcodeLabelDialog({
-  open, onOpenChange, item, markAsListedOnGenerate, onGenerated,
+  open, onOpenChange, item, onGenerated,
 }: BarcodeLabelDialogProps) {
   const { employee } = useAuthStore();
   const pos = usePosStore();
@@ -39,24 +37,24 @@ export default function BarcodeLabelDialog({
 
   // Always work with the latest version of the item from the store
   const currentItem = item ? pos.inventory.find((i) => i.id === item.id) || item : null;
-  const productCode = currentItem ? buildProductCode(currentItem, includeLocation) : '';
-  const description = currentItem ? buildDescription(currentItem, 42) : '';
+  const productCode = currentItem ? labelHeadline(currentItem, { appendLocation: includeLocation }) : '';
+  const encodedBarcode = currentItem ? labelBarcodeValue(currentItem, { appendLocation: includeLocation }) : '';
+  const description = currentItem ? buildDescription(currentItem, 48, { includeLocation }) : '';
   const isGenerated = !!currentItem?.labelGenerated;
-  const requiresGenerate = markAsListedOnGenerate && !isGenerated;
 
   // Generate preview barcode whenever code changes
   useEffect(() => {
     let cancelled = false;
-    if (!productCode) {
+    if (!encodedBarcode) {
       setBarcodeSvg('');
       return;
     }
     (async () => {
-      const svg = await generateBarcodeSvg(productCode, { width: 1.8, height: 50 });
+      const svg = await generateBarcodeSvg(encodedBarcode, { width: 1.8, height: 50 });
       if (!cancelled) setBarcodeSvg(svg);
     })();
     return () => { cancelled = true; };
-  }, [productCode]);
+  }, [encodedBarcode]);
 
   // Reset includeLocation on open
   useEffect(() => {
@@ -69,14 +67,7 @@ export default function BarcodeLabelDialog({
     setIsGenerating(true);
     try {
       await pos.generateInventoryLabel(currentItem.id, employee.id, employee.fullName);
-      if (markAsListedOnGenerate && currentItem.status === 'available') {
-        await pos.updateInventoryItem(currentItem.id, { status: 'listed' });
-        pos.logAction(employee.id, employee.fullName, 'Inventory', 'MARK_AVAILABLE', 'inventory', currentItem.id,
-          `${currentItem.brand} ${currentItem.model} (${currentItem.deviceCode}) — moved to Live Products at ${currentItem.storageLocation || 'N/A'}`);
-        toast({ title: 'Label generated & item is now Live', description: currentItem.deviceCode });
-      } else {
-        toast({ title: 'Label generated', description: currentItem.deviceCode });
-      }
+      toast({ title: 'Label generated', description: currentItem.deviceCode });
       if (onGenerated) onGenerated();
     } finally {
       setIsGenerating(false);
@@ -116,15 +107,13 @@ export default function BarcodeLabelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-md max-h-[90vh] overflow-y-auto"
-        onPointerDownOutside={(e) => requiresGenerate && e.preventDefault()}
-        onEscapeKeyDown={(e) => requiresGenerate && e.preventDefault()}
-      >
+        <DialogContent
+          className="sm:max-w-md max-h-[90vh] overflow-y-auto"
+        >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-[15px]">
             <Tag className="size-5 text-primary" />
-            {requiresGenerate ? 'Generate Label to Continue' : 'Product Label'}
+            Product Label
           </DialogTitle>
         </DialogHeader>
 
@@ -220,16 +209,6 @@ export default function BarcodeLabelDialog({
             </div>
           )}
 
-          {/* Workflow Required Notice */}
-          {requiresGenerate && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-              <AlertCircle className="size-4 text-blue-600 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-blue-800 leading-snug">
-                <span className="font-semibold">Required:</span> Generate the label to move this item to Live Products.
-              </p>
-            </div>
-          )}
-
           {/* Actions */}
           {!isGenerated ? (
             <div className="flex gap-2 pt-1">
@@ -237,11 +216,9 @@ export default function BarcodeLabelDialog({
                 {isGenerating ? <Loader2 className="size-4 mr-1.5 animate-spin" /> : <Tag className="size-4 mr-1.5" />}
                 Generate Label
               </Button>
-              {!requiresGenerate && (
-                <Button variant="ghost" className="h-10" onClick={() => onOpenChange(false)}>
-                  Close
-                </Button>
-              )}
+              <Button variant="ghost" className="h-10" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
             </div>
           ) : (
             <>

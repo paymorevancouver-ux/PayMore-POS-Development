@@ -76,7 +76,7 @@ describe('customer360', () => {
   it('connects a purchased device to current inventory status and rack', () => {
     const devices = getCustomerDeviceHistory(input);
     expect(devices[0].deviceId).toBe('BC05-000846');
-    expect(devices[0].currentStatus).toBe('Live');
+    expect(devices[0].currentStatus).toBe('Listed');
     expect(devices[0].currentLocation).toBe('Rack 4 / R2');
     expect(devices[0].transactionType).toBe('Sold to PayMore');
   });

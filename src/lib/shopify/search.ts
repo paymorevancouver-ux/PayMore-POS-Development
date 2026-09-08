@@ -2,7 +2,11 @@ import type { InventoryItem } from '@/types';
 import type { ShopifyListing } from '@/types/shopify';
 import { getAttributeValue } from '@/lib/shopify/attributes';
 
-export function matchesEligibleInventorySearch(item: InventoryItem, query: string, barcode = ''): boolean {
+export function matchesEligibleInventorySearch(
+  item: InventoryItem,
+  query: string,
+  extra = '',
+): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const blob = [
@@ -12,7 +16,7 @@ export function matchesEligibleInventorySearch(item: InventoryItem, query: strin
     item.model,
     item.serialImei,
     item.notes,
-    barcode,
+    extra,
     String(getAttributeValue((item.specifications || {}) as Record<string, unknown>, 'upcSku') || ''),
     String(getAttributeValue((item.specifications || {}) as Record<string, unknown>, 'imei1') || ''),
     String(getAttributeValue((item.specifications || {}) as Record<string, unknown>, 'imei2') || ''),

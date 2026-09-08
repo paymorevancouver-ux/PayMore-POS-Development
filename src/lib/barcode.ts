@@ -4,6 +4,8 @@
  * Uses jsPDF for PDF download generation.
  */
 import type { InventoryItem } from '@/types';
+import { formatCurrency } from '@/lib/taxCalc';
+import { isReusableRetailBarcode } from '@/lib/shopify/retailBarcode';
 
 // ─── Lazy module loading ───
 let _jsBarcodeMod: typeof import('jsbarcode') | null = null;
@@ -21,10 +23,31 @@ export function buildProductCode(item: InventoryItem, includeLocation = true): s
   return `${item.deviceCode}-${locClean}`;
 }
 
+/** Value encoded in the barcode graphic: the shared POS/Shopify retail barcode only. */
+export function labelBarcodeValue(item: InventoryItem, opts?: { appendLocation?: boolean; encodeBarcode?: string }): string {
+  const override = String(opts?.encodeBarcode || '').trim();
+  if (override) return override;
+  if (isReusableRetailBarcode(item.barcode, { deviceCode: item.deviceCode, serialImei: item.serialImei })) {
+    return String(item.barcode);
+  }
+  return '';
+}
+
+export function labelHeadline(item: InventoryItem, opts?: { appendLocation?: boolean; encodeBarcode?: string }): string {
+  return item.deviceCode;
+}
+
 /** Build a short description string for label (truncated with ...) */
-export function buildDescription(item: InventoryItem, maxLen = 40): string {
-  let desc = `${item.brand} ${item.model}`.trim();
-  if (item.category) desc += ` · ${item.category}`;
+export function buildDescription(
+  item: InventoryItem,
+  maxLen = 40,
+  opts?: { price?: number; title?: string; includeLocation?: boolean },
+): string {
+  let desc = String(opts?.title || `${item.brand} ${item.model}`).trim();
+  if (!opts?.title && item.category) desc += ` · ${item.category}`;
+  const price = opts?.price ?? item.expectedSalePrice;
+  if (Number(price) > 0) desc += ` · ${formatCurrency(Number(price))}`;
+  if (opts?.includeLocation && item.storageLocation) desc += ` · ${item.storageLocation}`;
   if (desc.length > maxLen) desc = desc.substring(0, maxLen - 3) + '...';
   return desc;
 }
@@ -34,7 +57,7 @@ export function buildDescription(item: InventoryItem, maxLen = 40): string {
 /** Generate Code128 barcode as SVG markup string */
 export async function generateBarcodeSvg(
   value: string,
-  options?: { width?: number; height?: number }
+  options?: { width?: number; height?: number; format?: 'CODE128' | 'UPC' }
 ): Promise<string> {
   if (!value) return '';
   const JsBarcode = await getJsBarcode();
@@ -42,7 +65,7 @@ export async function generateBarcodeSvg(
   const svg = document.createElementNS(xmlns, 'svg');
   try {
     JsBarcode(svg as unknown as SVGElement, value, {
-      format: 'CODE128',
+      format: options?.format || (/^\d{12}$/.test(value) ? 'UPC' : 'CODE128'),
       width: options?.width ?? 1.8,
       height: options?.height ?? 50,
       displayValue: false,
@@ -51,23 +74,36 @@ export async function generateBarcodeSvg(
       lineColor: '#000000',
     });
     return new XMLSerializer().serializeToString(svg);
-  } catch (e) {
-    console.error('[Barcode] SVG generation error:', e);
-    return '';
+  } catch {
+    try {
+      JsBarcode(svg as unknown as SVGElement, value, {
+        format: 'CODE128',
+        width: options?.width ?? 1.8,
+        height: options?.height ?? 50,
+        displayValue: false,
+        margin: 0,
+        background: '#ffffff',
+        lineColor: '#000000',
+      });
+      return new XMLSerializer().serializeToString(svg);
+    } catch (e) {
+      console.error('[Barcode] SVG generation error:', e);
+      return '';
+    }
   }
 }
 
 /** Generate Code128 barcode as PNG data URL (for PDF embedding) */
 export async function generateBarcodeDataUrl(
   value: string,
-  options?: { width?: number; height?: number }
+  options?: { width?: number; height?: number; format?: 'CODE128' | 'UPC' }
 ): Promise<string> {
   if (!value) return '';
   const JsBarcode = await getJsBarcode();
   const canvas = document.createElement('canvas');
   try {
     JsBarcode(canvas, value, {
-      format: 'CODE128',
+      format: options?.format || (/^\d{12}$/.test(value) ? 'UPC' : 'CODE128'),
       width: options?.width ?? 2,
       height: options?.height ?? 70,
       displayValue: false,
@@ -76,25 +112,50 @@ export async function generateBarcodeDataUrl(
       lineColor: '#000000',
     });
     return canvas.toDataURL('image/png');
-  } catch (e) {
-    console.error('[Barcode] Canvas generation error:', e);
-    return '';
+  } catch {
+    try {
+      JsBarcode(canvas, value, {
+        format: 'CODE128',
+        width: options?.width ?? 2,
+        height: options?.height ?? 70,
+        displayValue: false,
+        margin: 0,
+        background: '#ffffff',
+        lineColor: '#000000',
+      });
+      return canvas.toDataURL('image/png');
+    } catch (e) {
+      console.error('[Barcode] Canvas generation error:', e);
+      return '';
+    }
   }
 }
 
 // ─── Print HTML generation ───
 
+export interface PrintLabelOptions {
+  appendLocation?: boolean;
+  encodeBarcode?: string;
+  price?: number;
+  title?: string;
+}
+
 /** Build complete HTML for printing one or more product labels */
 export async function buildLabelHtml(
   items: InventoryItem[],
-  opts?: { appendLocation?: boolean }
+  opts?: PrintLabelOptions
 ): Promise<string> {
   const appendLocation = opts?.appendLocation ?? true;
   const labels = await Promise.all(
     items.map(async (item) => {
-      const code = buildProductCode(item, appendLocation);
-      const barcodeSvg = await generateBarcodeSvg(code, { width: 1.4, height: 40 });
-      const desc = buildDescription(item, 42);
+      const code = labelHeadline(item, { appendLocation, encodeBarcode: opts?.encodeBarcode });
+      const bars = labelBarcodeValue(item, { appendLocation, encodeBarcode: opts?.encodeBarcode });
+      const barcodeSvg = await generateBarcodeSvg(bars, { width: 1.4, height: 40 });
+      const desc = buildDescription(item, 48, {
+        price: opts?.price,
+        title: opts?.title,
+        includeLocation: appendLocation,
+      });
       return `
 <div class="label">
   <div class="code">${escapeHtml(code)}</div>
@@ -187,7 +248,7 @@ function escapeHtml(s: string): string {
 // ─── Print/Download Actions ───
 
 /** Print labels via hidden iframe (works on thermal & standard printers) */
-export async function printLabels(items: InventoryItem[], opts?: { appendLocation?: boolean }): Promise<void> {
+export async function printLabels(items: InventoryItem[], opts?: PrintLabelOptions): Promise<void> {
   if (items.length === 0) return;
   const html = await buildLabelHtml(items, opts);
 
@@ -228,7 +289,7 @@ export async function printLabels(items: InventoryItem[], opts?: { appendLocatio
 /** Download labels as multi-page PDF using jsPDF */
 export async function downloadLabelsPdf(
   items: InventoryItem[],
-  opts?: { appendLocation?: boolean; filename?: string }
+  opts?: PrintLabelOptions & { filename?: string }
 ): Promise<void> {
   if (items.length === 0) return;
   const appendLocation = opts?.appendLocation ?? true;
@@ -240,9 +301,14 @@ export async function downloadLabelsPdf(
   for (let i = 0; i < items.length; i++) {
     if (i > 0) pdf.addPage([2, 1], 'landscape');
     const item = items[i];
-    const code = buildProductCode(item, appendLocation);
-    const desc = buildDescription(item, 42);
-    const barcodeDataUrl = await generateBarcodeDataUrl(code, { width: 2, height: 70 });
+    const code = labelHeadline(item, { appendLocation, encodeBarcode: opts?.encodeBarcode });
+    const bars = labelBarcodeValue(item, { appendLocation, encodeBarcode: opts?.encodeBarcode });
+    const desc = buildDescription(item, 48, {
+      price: opts?.price,
+      title: opts?.title,
+      includeLocation: appendLocation,
+    });
+    const barcodeDataUrl = await generateBarcodeDataUrl(bars, { width: 2, height: 70 });
 
     // Line 1: Product Code (centered, top)
     pdf.setFont('courier', 'bold');

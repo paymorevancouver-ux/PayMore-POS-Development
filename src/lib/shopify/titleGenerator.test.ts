@@ -73,4 +73,15 @@ describe('Shopify title generator', () => {
     expect(title).toContain('Body');
     expect(title).not.toContain('CAM-1');
   });
+
+  it('appends extra title text', () => {
+    const title = generateShopifyTitle({
+      categoryKey: 'apple-iphone',
+      brand: 'Apple',
+      model: 'iPhone 15 Pro',
+      extraTitleText: 'w/ Charger',
+      attributes: { model: 'iPhone 15 Pro' },
+    });
+    expect(title.endsWith('w/ Charger')).toBe(true);
+  });
 });

@@ -27,6 +27,7 @@ export const SALES_CHANNELS = [
   { value: 'online', label: 'Online' },
   { value: 'phone', label: 'Phone' },
   { value: 'marketplace', label: 'Marketplace' },
+  { value: 'shopify', label: 'Shopify' },
 ] as const;
 
 export const DEVICE_CONDITIONS = [
@@ -88,7 +89,7 @@ export const CATEGORIES = [...DEVICE_CATEGORY_LABELS, ...LEGACY_CATEGORIES] as c
 
 export const INVENTORY_STATUSES = [
   { value: 'available', label: 'Non-Listed', color: 'text-amber-700 bg-amber-50 border-amber-200' },
-  { value: 'listed', label: 'Available', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  { value: 'listed', label: 'Listed', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
   { value: 'sold', label: 'Sold', color: 'text-slate-600 bg-slate-50 border-slate-200' },
   { value: 'reserved', label: 'Reserved', color: 'text-purple-700 bg-purple-50 border-purple-200' },
   { value: 'returned', label: 'Returned', color: 'text-blue-700 bg-blue-50 border-blue-200' },

@@ -12,14 +12,38 @@ import {
   userErrorsMessage,
 } from '../_shared/shopify.ts';
 import {
-  barcodeForShopify,
-  descriptionToHtml,
+  approvedDescriptionHtml,
+  buildCategorySetPayload,
+  buildDescriptionSetPayload,
+  buildProductCreatePayload,
+  buildProductUpdatePayload,
+  buildVariantUpdatePayload,
+  categoryIdsMatch,
+  categoryMetafields,
+  chooseInitialVariant,
+  costsMatch,
+  descriptionVerificationIssue,
   holdingComplete,
   isHttpUrl,
+  listingHasConfirmedTaxonomy,
+  listingPhotoAssets,
   parseDataUrl,
-  publicMetafields,
-  sanitizeTags,
+    photoSourceKind,
+    productSetCategory,
+    publicMetafields,
+    publishStepError,
+    shopifyCategoryRequiredMessage,
+    skuLookupDecision,
+    unexpectedVariantCountMessage,
 } from '../_shared/shopify-payload.ts';
+import {
+  BARCODE_MISMATCH_MESSAGE,
+  barcodeForShopify,
+  detectBarcodeMismatch,
+  generateRetailBarcode,
+  inventoryItemCostUpdateInput,
+  resolveExistingBarcode,
+} from '../_shared/shopify-barcode.ts';
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL') || '',
@@ -74,6 +98,7 @@ Deno.serve(async (req) => {
         shopifyAdminUrl: listing.shopify_admin_url || listing.shopify_url,
         shopifyStorefrontUrl: listing.shopify_storefront_url,
         shopifyUrl: listing.shopify_url,
+        barcode: listing.barcode,
       });
     }
     if (listing.status === 'publishing') {
@@ -108,15 +133,37 @@ Deno.serve(async (req) => {
     if (issues.length) {
       return json({ success: false, status: 'validation_failed', message: issues[0].message, issues }, 422);
     }
+    if (!inventory) {
+      return json({ success: false, status: 'validation_failed', message: 'Inventory item does not exist.' }, 422);
+    }
 
     const claimed = await claimPublishing(supabase, listing);
     if (!claimed.ok) {
       return json({ success: false, status: claimed.status, listingStatus: claimed.listingStatus, message: claimed.message }, claimed.http);
     }
 
-    await writeAudit(supabase, listing.store_id, employee.id, employee.full_name || employeeName, listing, inventory, 'SHOPIFY_PUBLISH_STARTED', listing.shopify_product_id ? 'Retry started' : 'Publish started');
+    const barcodeReady = await resolveAndPersistBarcode(
+      supabase,
+      claimed.listing,
+      inventory,
+      employee.id,
+      employee.full_name || employeeName,
+    );
+    if (!barcodeReady.ok) {
+      await failListing(supabase, claimed.listing, publishStepError('RESOLVE_BARCODE', barcodeReady.message));
+      return json({
+        success: false,
+        status: 'failed',
+        listingStatus: 'error',
+        message: publishStepError('RESOLVE_BARCODE', barcodeReady.message),
+      }, 422);
+    }
+    claimed.listing.barcode = barcodeReady.barcode;
+    inventory.barcode = barcodeReady.barcode;
 
-    const result = await publishToShopify(supabase, claimed.listing, inventory, employee.id, employee.full_name || employeeName);
+    await writeAudit(supabase, listing.store_id, employee.id, employee.full_name || employeeName, listing, inventory, 'SHOPIFY_PUBLISH_STARTED', claimed.listing.shopify_product_id ? 'Retry started' : 'Publish started');
+
+    const result = await publishToShopify(supabase, claimed.listing, inventory, employee.id, employee.full_name || employeeName, barcodeReady.barcode);
     return json(result, result.success || result.status === 'already_published' ? 200 : 422);
   } catch (err) {
     return json({
@@ -137,15 +184,22 @@ function validateListing(listing: Record<string, unknown>, inventory: Record<str
   if (!(Number(listing.quantity) > 0)) issues.push({ field: 'quantity', message: 'Listing quantity must be greater than 0.' });
   if (!String(listing.shopify_vendor || '').trim()) issues.push({ field: 'vendor', message: 'Vendor is required.' });
   if (!String(listing.shopify_product_type || '').trim()) issues.push({ field: 'productType', message: 'Product type is required.' });
+  if (!listingHasConfirmedTaxonomy(listing)) {
+    issues.push({ field: 'shopifyCategoryId', message: shopifyCategoryRequiredMessage(listing) });
+  }
   if (!String(listing.condition || '').trim()) issues.push({ field: 'condition', message: 'Condition is required.' });
   if (!inventory) {
     issues.push({ field: 'inventory', message: 'Inventory item does not exist.' });
     return issues;
   }
   const onHand = Number(inventory.quantity_on_hand || 0);
-  if (!(onHand > 0)) issues.push({ field: 'quantity_on_hand', message: 'POS quantity on hand must be greater than 0.' });
-  if (Number(listing.quantity) > onHand) issues.push({ field: 'quantity', message: 'Listing quantity cannot exceed POS quantity on hand.' });
-  if (inventory.status === 'sold') issues.push({ field: 'inventory', message: 'Inventory item is sold.' });
+  if (!(onHand > 0) || inventory.status === 'sold') {
+    issues.push({ field: 'quantity_on_hand', message: 'This item is no longer in stock and cannot be listed.' });
+  }
+  if (Number(listing.quantity) > onHand && onHand > 0) issues.push({ field: 'quantity', message: 'Listing quantity cannot exceed POS quantity on hand.' });
+  if (inventory.status === 'listed' || inventory.listing_method === 'processed_manual') {
+    issues.push({ field: 'inventory', message: 'Inventory item is already listed.' });
+  }
   if (inventory.status === 'scrapped') issues.push({ field: 'inventory', message: 'Inventory item is scrapped.' });
   if (!holdingComplete(String(inventory.acquired_at || ''), holdingDays)) {
     issues.push({ field: 'holding', message: 'Holding period is not complete.' });
@@ -197,6 +251,141 @@ async function claimPublishing(client: SupabaseClient, listing: Record<string, u
   return { ok: true as const, listing: data };
 }
 
+async function resolveAndPersistBarcode(
+  client: SupabaseClient,
+  listing: Record<string, unknown>,
+  inventory: Record<string, unknown> | null,
+  employeeId: string,
+  employeeName: string,
+): Promise<{ ok: true; barcode: string } | { ok: false; message: string }> {
+  if (!inventory) return { ok: false, message: 'Inventory item does not exist.' };
+  const identity = {
+    deviceCode: String(inventory.device_code || listing.sku || ''),
+    sku: String(listing.sku || inventory.device_code || ''),
+    serialImei: String(inventory.serial_imei || ''),
+  };
+  const specs = (inventory.specifications && typeof inventory.specifications === 'object')
+    ? inventory.specifications as Record<string, unknown>
+    : {};
+  const existing = resolveExistingBarcode({
+    inventoryBarcode: String(inventory.barcode || ''),
+    listingBarcode: String(listing.barcode || ''),
+    upcSku: String(specs.upcSku || ''),
+    deviceCode: identity.deviceCode,
+    sku: identity.sku,
+    serialImei: identity.serialImei,
+  });
+
+  const posExisting = barcodeForShopify(String(inventory.barcode || ''), identity);
+  const listingExisting = barcodeForShopify(String(listing.barcode || ''), identity);
+  if (posExisting && listingExisting && posExisting !== listingExisting) {
+    return { ok: false, message: BARCODE_MISMATCH_MESSAGE };
+  }
+
+  let barcode = existing;
+  let generated = false;
+  if (!barcode) {
+    const taken = await loadTakenBarcodes(client, String(inventory.id));
+    try {
+      barcode = generateRetailBarcode({
+        deviceCode: identity.deviceCode,
+        inventoryId: String(inventory.id),
+        taken,
+      });
+      generated = true;
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : 'Could not generate a unique barcode.' };
+    }
+  }
+
+  const savedInv = await client.from('pos_inventory').update({ barcode }).eq('id', String(inventory.id));
+  if (savedInv.error && /barcode/i.test(savedInv.error.message || '')) {
+    return { ok: false, message: 'Missing column pos_inventory.barcode. Run additive migration 20260904030000_pos_inventory_barcode.sql.' };
+  }
+  if (savedInv.error) {
+    return { ok: false, message: 'Could not save barcode to POS inventory.' };
+  }
+  await client.from('pos_shopify_listings').update({ barcode, updated_at: new Date().toISOString() }).eq('id', String(listing.id));
+
+  if (generated) {
+    await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'BARCODE_GENERATED', `barcode=${barcode} device=${identity.deviceCode}`);
+  }
+  await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'BARCODE_ASSIGNED_TO_INVENTORY', `barcode=${barcode} inventory=${inventory.id}`);
+  return { ok: true, barcode };
+}
+
+async function loadTakenBarcodes(client: SupabaseClient, exceptInventoryId: string): Promise<Set<string>> {
+  const taken = new Set<string>();
+  const remember = (value?: string | null) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    taken.add(raw);
+    const digits = raw.replace(/\D/g, '');
+    if (digits) taken.add(digits);
+  };
+  const { data: inventoryRows } = await client.from('pos_inventory').select('id, barcode').neq('id', exceptInventoryId);
+  for (const row of inventoryRows || []) remember((row as { barcode?: string }).barcode);
+  const { data: listingRows } = await client.from('pos_shopify_listings').select('inventory_item_id, barcode').neq('inventory_item_id', exceptInventoryId);
+  for (const row of listingRows || []) remember((row as { barcode?: string }).barcode);
+  return taken;
+}
+
+async function persistConfirmedBarcode(
+  client: SupabaseClient,
+  listing: Record<string, unknown>,
+  inventory: Record<string, unknown>,
+  barcode: string,
+) {
+  await client.from('pos_inventory').update({ barcode }).eq('id', String(inventory.id));
+  await updateListingSafe(client, String(listing.id), { barcode, updated_at: new Date().toISOString() });
+}
+
+async function updateInventoryItemCost(inventoryItemId: string, cost: number) {
+  const input = inventoryItemCostUpdateInput(cost);
+  const result = await shopifyGraphql<{
+    inventoryItemUpdate?: {
+      inventoryItem?: { id?: string; tracked?: boolean; unitCost?: { amount?: string } };
+      userErrors?: Array<{ message: string }>;
+    };
+  }>(`mutation InventoryCost($id: ID!, $input: InventoryItemInput!) {
+    inventoryItemUpdate(id: $id, input: $input) {
+      inventoryItem { id tracked unitCost { amount currencyCode } }
+      userErrors { field message }
+    }
+  }`, { id: inventoryItemId, input });
+  const err = userErrorsMessage(result.data?.inventoryItemUpdate?.userErrors);
+  if (err) throw new Error(publishStepError('COST_UPDATE', err));
+  if (!result.data?.inventoryItemUpdate?.inventoryItem?.id) {
+    throw new Error(publishStepError('COST_UPDATE', 'Shopify did not confirm the inventory cost update.'));
+  }
+  const verified = await verifyInventoryItemCost(inventoryItemId, cost);
+  if (!verified) {
+    throw new Error(publishStepError('COST_UPDATE', 'Shopify unitCost did not match POS inventory cost.'));
+  }
+}
+
+async function verifyInventoryItemCost(inventoryItemId: string, posCost: number): Promise<boolean> {
+  const result = await shopifyGraphql<{
+    inventoryItem?: { id?: string; unitCost?: { amount?: string } | null } | null;
+  }>(`query InventoryCost($id: ID!) {
+    inventoryItem(id: $id) { id unitCost { amount currencyCode } }
+  }`, { id: inventoryItemId });
+  return costsMatch(posCost, result.data?.inventoryItem?.unitCost?.amount);
+}
+
+async function readVariantBarcode(variantId: string, productId: string): Promise<string> {
+  if (variantId) {
+    const result = await shopifyGraphql<{ productVariant?: { barcode?: string | null } | null }>(
+      `query VariantBarcode($id: ID!) { productVariant(id: $id) { barcode } }`,
+      { id: variantId },
+    );
+    const value = String(result.data?.productVariant?.barcode || '').trim();
+    if (value) return value;
+  }
+  const product = await fetchProduct(productId);
+  return String(product?.barcode || '').trim();
+}
+
 async function resolveLocation(): Promise<{ id: string; name?: string }> {
   const configured = shopifyConfiguredLocationId();
   const result = await shopifyGraphql<{ locations: { nodes: Array<{ id: string; name: string; isActive: boolean }> } }>(
@@ -219,62 +408,130 @@ async function publishToShopify(
   inventory: Record<string, unknown>,
   employeeId: string,
   employeeName: string,
+  barcode: string,
 ) {
   const domain = shopifyStoreDomain();
   const warnings: string[] = [];
   const location = await resolveLocation();
   const qty = Math.min(Number(listing.quantity || 1), Number(inventory.quantity_on_hand || 1));
   const sku = String(listing.sku || inventory.device_code || '').trim();
-  const barcode = barcodeForShopify(String(listing.barcode || ''));
+  const posCost = Number(inventory.cost_per_unit || 0);
   let productId = String(listing.shopify_product_id || '');
   let variantId = String(listing.shopify_variant_id || '');
   let inventoryItemId = String(listing.shopify_inventory_item_id || '');
   let handle = String(listing.shopify_handle || '');
+  let confirmedBarcode = barcode;
+  let media = { expected: 0, uploaded: 0, warnings: [] as string[] };
 
   try {
     if (productId) {
       const existing = await fetchProduct(productId);
-      if (!existing) throw new Error('Existing Shopify product could not be loaded. Confirm the product still exists.');
+      if (!existing) {
+        throw new Error(publishStepError('CREATE_OR_RECONCILE_PRODUCT', 'Saved Shopify product ID no longer exists. Manual reconciliation required.'));
+      }
       productId = existing.id;
-      variantId = existing.variantId || variantId;
-      inventoryItemId = existing.inventoryItemId || inventoryItemId;
       handle = existing.handle || handle;
+      const initial = chooseInitialVariant(existing.variants);
+      variantId = String(initial?.id || existing.variantId || variantId);
+      inventoryItemId = String(initial?.inventoryItem?.id || existing.inventoryItemId || inventoryItemId);
+      await persistIds(client, listing, { productId, variantId, inventoryItemId, handle, locationId: location.id, barcode });
       await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_PUBLISH_RETRY', `Continuing existing product ${productId}`);
     } else {
-      const created = await createProduct(listing, sku, barcode);
-      productId = created.productId;
-      variantId = created.variantId;
-      inventoryItemId = created.inventoryItemId;
-      handle = created.handle;
-      await persistIds(client, listing, { productId, variantId, inventoryItemId, handle, locationId: location.id });
-      await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_PRODUCT_CREATED', productId);
+      const matches = await lookupVariantsBySku(sku);
+      const decision = skuLookupDecision(sku, matches);
+      if (decision.action === 'duplicate') throw new Error(decision.message);
+      if (decision.action === 'adopt') {
+        productId = decision.productId;
+        variantId = decision.variantId;
+        inventoryItemId = decision.inventoryItemId;
+        const adopted = await fetchProduct(productId);
+        if (!adopted) {
+          throw new Error(publishStepError('SKU_LOOKUP', 'Matched Shopify SKU product could not be loaded. Manual reconciliation required.'));
+        }
+        handle = adopted.handle || handle;
+        const initial = chooseInitialVariant(adopted.variants);
+        variantId = String(initial?.id || variantId);
+        inventoryItemId = String(initial?.inventoryItem?.id || inventoryItemId);
+        await persistIds(client, listing, { productId, variantId, inventoryItemId, handle, locationId: location.id, barcode });
+        await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_PRODUCT_ADOPTED', productId);
+      } else {
+        const created = await createProduct(listing);
+        productId = created.productId;
+        variantId = created.variantId;
+        inventoryItemId = created.inventoryItemId;
+        handle = created.handle;
+        await persistIds(client, listing, { productId, variantId, inventoryItemId, handle, locationId: location.id, barcode });
+        await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_PRODUCT_CREATED', productId);
+        const variantIssue = unexpectedVariantCountMessage(created.variantCount);
+        if (variantIssue) throw new Error(variantIssue);
+      }
     }
 
-    await persistIds(client, listing, { productId, variantId, inventoryItemId, handle, locationId: location.id });
+    await persistIds(client, listing, { productId, variantId, inventoryItemId, handle, locationId: location.id, barcode });
 
-    if (productId && listing.shopify_product_id) {
-      await updateExistingProduct(listing, productId, variantId, sku, barcode);
+    await updateBaseProduct(listing, productId, approvedDescriptionHtml(String(listing.description || '')), productSetCategory(listing) || '');
+    await updateInitialVariant(productId, variantId, sku, barcode, listing);
+
+    if (!inventoryItemId) {
+      throw new Error(publishStepError('COST_UPDATE', 'Shopify inventory item ID is missing.'));
     }
+    await updateInventoryItemCost(inventoryItemId, posCost);
+    await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_COST_SET', `inventoryItem=${inventoryItemId}`);
+    await activateInventory(inventoryItemId, location.id, String(listing.id));
+    await setInventory(inventoryItemId, location.id, qty, String(listing.id));
+    const verifiedQty = await verifyInventory(inventoryItemId, location.id, qty);
+    if (!verifiedQty) throw new Error(publishStepError('SET_INVENTORY', 'Shopify inventory quantity could not be verified.'));
 
-    if (inventoryItemId) {
-      await activateInventory(inventoryItemId, location.id, String(listing.id));
-      await setInventory(inventoryItemId, location.id, qty, String(listing.id));
-      const verified = await verifyInventory(inventoryItemId, location.id, qty);
-      if (!verified) warnings.push('Inventory was set, but Shopify quantity could not be verified.');
+    await assignCategory(productId, productSetCategory(listing) || '');
+
+    media = await attachListingPhotos(client, productId, listing.photos, String(listing.title || 'Product'));
+    warnings.push(...media.warnings);
+    if (media.expected > 0 && media.uploaded === 0) {
+      throw new Error(publishStepError('PHOTO_UPLOAD', `0 successful photos. Expected ${media.expected}.`));
     }
-
-    const photoWarning = await attachPhotos(productId, Array.isArray(listing.photos) ? listing.photos as string[] : [], String(listing.title || 'Product'));
-    if (photoWarning) warnings.push(photoWarning);
 
     await setMetafields(productId, listing);
     await activateProduct(productId);
     const publishedToStore = await publishToOnlineStore(productId, warnings);
 
+    const shopifyBarcode = await readVariantBarcode(variantId, productId);
+    const mismatch = detectBarcodeMismatch(barcode, shopifyBarcode);
+    if (mismatch) throw new Error(publishStepError('BARCODE_VERIFY', mismatch));
+    confirmedBarcode = shopifyBarcode || barcode;
+    await persistConfirmedBarcode(client, listing, inventory, confirmedBarcode);
+    await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_BARCODE_SET', `barcode=${confirmedBarcode}`);
+
+    const verified = await fetchProduct(productId);
+    if (!verified) throw new Error(publishStepError('VERIFY', 'Shopify product could not be loaded after update.'));
+    const variantIssue = unexpectedVariantCountMessage(verified.variants.length);
+    if (variantIssue) throw new Error(variantIssue);
+    const initial = chooseInitialVariant(verified.variants);
+    if (!initial?.id) throw new Error(publishStepError('VARIANT_VERIFY', 'Shopify product has no variant.'));
+    variantId = initial.id;
+    inventoryItemId = String(initial.inventoryItem?.id || inventoryItemId);
+    if (String(initial.sku || '').trim().toUpperCase() !== sku.toUpperCase()) {
+      throw new Error(publishStepError('VARIANT_VERIFY', `Shopify SKU ${initial.sku || '(blank)'} does not match POS device code ${sku}.`));
+    }
+    const sentHtml = approvedDescriptionHtml(String(listing.description || ''));
+    const descIssue = descriptionVerificationIssue(sentHtml, verified.descriptionHtml);
+    if (descIssue) throw new Error(descIssue);
+    const expectedCategoryId = productSetCategory(listing) || '';
+    if (expectedCategoryId && !categoryIdsMatch(expectedCategoryId, verified.category?.id)) {
+      throw new Error(publishStepError('CATEGORY_UPDATE', `Shopify category ${verified.category?.id || '(blank)'} does not match ${expectedCategoryId}.`));
+    }
+    if (!(await verifyInventoryItemCost(inventoryItemId, posCost))) {
+      throw new Error(publishStepError('COST_UPDATE', 'Shopify unitCost did not match POS inventory cost.'));
+    }
+    if (media.expected > 0 && verified.mediaCount < 1) {
+      throw new Error(publishStepError('PHOTO_UPLOAD', 'Shopify product has no media after photo upload.'));
+    }
+
     const adminUrl = adminProductUrl(domain, productId);
     const storefrontUrl = publishedToStore && handle ? storefrontProductUrl(domain, handle) : '';
     const now = new Date().toISOString();
-    await updateListingSafe(client, String(listing.id), {
+    await persistIdsOrThrow(client, listing, {
       status: 'active',
+      barcode: confirmedBarcode,
       shopify_product_id: productId,
       shopify_variant_id: variantId || null,
       shopify_inventory_item_id: inventoryItemId || null,
@@ -290,6 +547,8 @@ async function publishToShopify(
       updated_at: now,
     });
     await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_PUBLISH_SUCCESS', productId);
+    await writeAudit(client, String(listing.store_id), employeeId, employeeName, listing, inventory, 'SHOPIFY_LISTING_ACTIVE', `barcode=${confirmedBarcode} product=${productId}`);
+    await markInventoryShopifyListed(client, String(inventory.id));
 
     return {
       success: true,
@@ -303,6 +562,11 @@ async function publishToShopify(
       shopifyAdminUrl: adminUrl,
       shopifyStorefrontUrl: storefrontUrl,
       shopifyUrl: adminUrl,
+      barcode: confirmedBarcode,
+      labelEligible: true,
+      photo_count_expected: media.expected,
+      photo_count_uploaded: media.uploaded,
+      photo_warnings: media.warnings,
       warnings,
     };
   } catch (err) {
@@ -310,6 +574,7 @@ async function publishToShopify(
     await updateListingSafe(client, String(listing.id), {
       status: 'error',
       last_error: message,
+      barcode: barcode || listing.barcode || null,
       shopify_product_id: productId || listing.shopify_product_id || null,
       shopify_variant_id: variantId || listing.shopify_variant_id || null,
       shopify_inventory_item_id: inventoryItemId || listing.shopify_inventory_item_id || null,
@@ -327,18 +592,50 @@ async function publishToShopify(
       shopifyVariantId: variantId || undefined,
       shopifyInventoryItemId: inventoryItemId || undefined,
       shopifyHandle: handle || undefined,
+      barcode: barcode || undefined,
+      photo_count_expected: media.expected,
+      photo_count_uploaded: media.uploaded,
+      photo_warnings: media.warnings,
       warnings,
     };
   }
 }
 
-async function createProduct(listing: Record<string, unknown>, sku: string, barcode: string) {
+type VariantNode = {
+  id: string;
+  title?: string | null;
+  sku?: string | null;
+  barcode?: string | null;
+  inventoryItem?: {
+    id?: string;
+    unitCost?: { amount?: string; currencyCode?: string } | null;
+  } | null;
+};
+
+type ProductSnapshot = {
+  id: string;
+  handle: string;
+  descriptionHtml?: string | null;
+  category?: { id?: string | null; name?: string | null } | null;
+  variants: VariantNode[];
+  mediaCount: number;
+  barcode?: string;
+  variantId?: string;
+  inventoryItemId?: string;
+};
+
+function throwStep(step: string, message: string): never {
+  throw new Error(publishStepError(step, message));
+}
+
+async function createProduct(listing: Record<string, unknown>) {
+  const input = buildProductCreatePayload(listing);
   const result = await shopifyGraphql<{
     productSet: {
       product?: {
         id: string;
         handle: string;
-        variants?: { nodes: Array<{ id: string; sku?: string; inventoryItem?: { id: string } }> };
+        variants?: { nodes: VariantNode[] };
       };
       userErrors?: Array<{ field?: string[]; message: string }>;
     };
@@ -347,107 +644,253 @@ async function createProduct(listing: Record<string, unknown>, sku: string, barc
       product {
         id
         handle
-        variants(first: 5) {
-          nodes { id sku inventoryItem { id } }
+        descriptionHtml
+        category { id name }
+        variants(first: 10) {
+          nodes { id title sku barcode inventoryItem { id unitCost { amount currencyCode } } }
         }
       }
       userErrors { field message }
     }
-  }`, {
-    synchronous: true,
-    input: {
-      title: String(listing.title),
-      descriptionHtml: descriptionToHtml(String(listing.description || '')),
-      vendor: String(listing.shopify_vendor || ''),
-      productType: String(listing.shopify_product_type || ''),
-      tags: sanitizeTags(listing.tags),
-      status: 'DRAFT',
-      productOptions: [{ name: 'Title', values: [{ name: 'Default Title' }] }],
-      variants: [{
-        optionValues: [{ optionName: 'Title', name: 'Default Title' }],
-        price: String(Number(listing.price).toFixed(2)),
-        compareAtPrice: listing.compare_at_price != null && Number(listing.compare_at_price) > 0
-          ? String(Number(listing.compare_at_price).toFixed(2))
-          : undefined,
-        barcode: barcode || undefined,
-        inventoryPolicy: 'DENY',
-        inventoryItem: { tracked: true, sku },
-      }],
-    },
-  });
-
+  }`, { synchronous: true, input });
   const err = userErrorsMessage(result.data?.productSet?.userErrors);
-  if (err) throw new Error(err);
   const product = result.data?.productSet?.product;
-  const variant = product?.variants?.nodes?.[0];
-  if (!product?.id) throw new Error('Shopify did not return a product ID.');
+  if (!product?.id) {
+    if (err) throw new Error(publishStepError('CREATE_OR_RECONCILE_PRODUCT', err));
+    throwStep('CREATE_OR_RECONCILE_PRODUCT', 'Shopify did not return a product ID.');
+  }
+  const nodes = product.variants?.nodes || [];
+  const initial = chooseInitialVariant(nodes);
+  if (!initial?.id) {
+    throwStep('CREATE_OR_RECONCILE_PRODUCT', 'Shopify did not return the initial product variant.');
+  }
   return {
     productId: product.id,
-    variantId: variant?.id || '',
-    inventoryItemId: variant?.inventoryItem?.id || '',
+    variantId: String(initial.id),
+    inventoryItemId: String(initial.inventoryItem?.id || ''),
     handle: product.handle || '',
+    variantCount: nodes.length,
   };
 }
 
-async function fetchProduct(id: string) {
+async function lookupVariantsBySku(sku: string): Promise<Array<{ productId: string; variantId: string; inventoryItemId?: string; sku?: string | null }>> {
+  const safe = sku.replace(/"/g, '');
+  if (!safe) return [];
+  const result = await shopifyGraphql<{
+    productVariants?: {
+      nodes: Array<{
+        id: string;
+        sku?: string | null;
+        product?: { id: string };
+        inventoryItem?: { id?: string };
+      }>;
+    };
+  }>(`query SkuSearch($query: String!) {
+    productVariants(first: 25, query: $query) {
+      nodes {
+        id
+        sku
+        product { id }
+        inventoryItem { id }
+      }
+    }
+  }`, { query: `sku:"${safe}"` });
+  return (result.data?.productVariants?.nodes || [])
+    .filter((row) => row.product?.id && row.id)
+    .map((row) => ({
+      productId: row.product!.id,
+      variantId: row.id,
+      inventoryItemId: row.inventoryItem?.id || '',
+      sku: row.sku,
+    }));
+}
+
+async function fetchProduct(id: string): Promise<ProductSnapshot | null> {
   const result = await shopifyGraphql<{
     product: {
       id: string;
       handle: string;
-      variants?: { nodes: Array<{ id: string; inventoryItem?: { id: string } }> };
+      descriptionHtml?: string | null;
+      category?: { id?: string | null; name?: string | null } | null;
+      variants?: { nodes: VariantNode[] };
+      media?: { nodes: Array<{ id: string }> };
     } | null;
   }>(`query Product($id: ID!) {
     product(id: $id) {
       id
       handle
-      variants(first: 5) { nodes { id inventoryItem { id } } }
+      descriptionHtml
+      category { id name }
+      variants(first: 10) {
+        nodes { id title sku barcode inventoryItem { id unitCost { amount currencyCode } } }
+      }
+      media(first: 30) { nodes { id } }
     }
   }`, { id });
   const product = result.data?.product;
   if (!product) return null;
+  const variants = product.variants?.nodes || [];
   return {
     id: product.id,
     handle: product.handle,
-    variantId: product.variants?.nodes?.[0]?.id || '',
-    inventoryItemId: product.variants?.nodes?.[0]?.inventoryItem?.id || '',
+    descriptionHtml: product.descriptionHtml,
+    category: product.category,
+    variants,
+    mediaCount: product.media?.nodes?.length || 0,
+    barcode: variants[0]?.barcode || '',
+    variantId: variants[0]?.id || '',
+    inventoryItemId: variants[0]?.inventoryItem?.id || '',
   };
 }
 
-async function updateExistingProduct(
+async function updateBaseProduct(
   listing: Record<string, unknown>,
+  productId: string,
+  descriptionHtml: string,
+  categoryId: string,
+) {
+  const input = buildProductUpdatePayload(listing, { descriptionHtml, categoryId });
+  const product = { id: productId, ...input };
+
+  const runUpdate = async (payload: Record<string, unknown>) => {
+    const result = await shopifyGraphql<{
+      productUpdate: {
+        product?: { id: string; descriptionHtml?: string | null; category?: { id?: string | null } | null };
+        userErrors?: Array<{ message: string }>;
+      };
+    }>(`mutation UpdateProduct($product: ProductUpdateInput!) {
+      productUpdate(product: $product) {
+        product { id descriptionHtml category { id name } }
+        userErrors { field message }
+      }
+    }`, { product: payload });
+    const err = userErrorsMessage(result.data?.productUpdate?.userErrors);
+    if (err) throw new Error(err);
+    return result.data?.productUpdate?.product;
+  };
+
+  const runSet = async (setInput: Record<string, unknown>) => {
+    const result = await shopifyGraphql<{
+      productSet?: {
+        product?: { id: string; descriptionHtml?: string | null; category?: { id?: string | null } | null };
+        userErrors?: Array<{ message: string }>;
+      };
+    }>(`mutation UpdateProductSet($identifier: ProductSetIdentifiers, $input: ProductSetInput!, $synchronous: Boolean) {
+      productSet(identifier: $identifier, input: $input, synchronous: $synchronous) {
+        product { id descriptionHtml category { id name } }
+        userErrors { field message }
+      }
+    }`, {
+      identifier: { id: productId },
+      synchronous: true,
+      input: setInput,
+    });
+    const err = userErrorsMessage(result.data?.productSet?.userErrors);
+    if (err) throw new Error(err);
+    return result.data?.productSet?.product;
+  };
+
+  try {
+    const updated = await runUpdate(product);
+    const descIssue = descriptionVerificationIssue(descriptionHtml, updated?.descriptionHtml);
+    if (descIssue) throw new Error(descIssue);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    if (categoryId && /categor/i.test(message)) {
+      const { category: _ignored, ...withoutCategory } = input;
+      const updated = await runUpdate({ id: productId, ...withoutCategory });
+      const descIssue = descriptionVerificationIssue(descriptionHtml, updated?.descriptionHtml);
+      if (descIssue) {
+        const fallback = await runSet(buildDescriptionSetPayload(descriptionHtml));
+        const fallbackIssue = descriptionVerificationIssue(descriptionHtml, fallback?.descriptionHtml);
+        if (fallbackIssue) throw new Error(publishStepError('UPDATE_BASE_PRODUCT', fallbackIssue));
+      }
+      return;
+    }
+    try {
+      const fallback = await runSet(input);
+      const descIssue = descriptionVerificationIssue(descriptionHtml, fallback?.descriptionHtml);
+      if (descIssue) throw new Error(descIssue);
+      return;
+    } catch (fallbackErr) {
+      const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : message;
+      throw new Error(publishStepError('UPDATE_BASE_PRODUCT', fallbackMessage));
+    }
+  }
+}
+
+async function updateInitialVariant(
   productId: string,
   variantId: string,
   sku: string,
   barcode: string,
+  listing: Record<string, unknown>,
 ) {
+  if (!variantId) throwStep('VARIANT_UPDATE', 'Shopify product has no initial variant to update.');
   const result = await shopifyGraphql<{
-    productSet: { userErrors?: Array<{ message: string }> };
-  }>(`mutation ProductReconcile($input: ProductSetInput!, $synchronous: Boolean) {
-    productSet(input: $input, synchronous: $synchronous) {
+    productVariantsBulkUpdate?: {
+      productVariants?: Array<{ id?: string; sku?: string; barcode?: string }>;
+      userErrors?: Array<{ message: string }>;
+    };
+  }>(`mutation VariantUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants { id sku barcode }
       userErrors { field message }
     }
   }`, {
-    synchronous: true,
-    input: {
-      id: productId,
-      title: String(listing.title),
-      descriptionHtml: descriptionToHtml(String(listing.description || '')),
-      vendor: String(listing.shopify_vendor || ''),
-      productType: String(listing.shopify_product_type || ''),
-      tags: sanitizeTags(listing.tags),
-      variants: variantId ? [{
-        id: variantId,
-        price: String(Number(listing.price).toFixed(2)),
-        compareAtPrice: listing.compare_at_price != null && Number(listing.compare_at_price) > 0
-          ? String(Number(listing.compare_at_price).toFixed(2))
-          : undefined,
-        barcode: barcode || undefined,
-        inventoryItem: { tracked: true, sku },
-      }] : undefined,
-    },
+    productId,
+    variants: [buildVariantUpdatePayload({
+      variantId,
+      sku,
+      barcode,
+      price: listing.price as number | string,
+      compareAtPrice: (listing.compare_at_price ?? listing.compareAtPrice) as number | string | null,
+    })],
   });
-  const err = userErrorsMessage(result.data?.productSet?.userErrors);
-  if (err) throw new Error(`Invalid product data: ${err}`);
+  const err = userErrorsMessage(result.data?.productVariantsBulkUpdate?.userErrors);
+  if (err) throw new Error(publishStepError('VARIANT_UPDATE', err));
+}
+
+async function assignCategory(productId: string, categoryId: string) {
+  if (!categoryId) return;
+  const updated = await shopifyGraphql<{
+    productUpdate?: {
+      product?: { category?: { id?: string | null } | null };
+      userErrors?: Array<{ message: string }>;
+    };
+  }>(`mutation SetCategory($product: ProductUpdateInput!) {
+    productUpdate(product: $product) {
+      product { id category { id name } }
+      userErrors { field message }
+    }
+  }`, { product: { id: productId, category: categoryId } });
+  const err = userErrorsMessage(updated.data?.productUpdate?.userErrors);
+  if (err) {
+    const fallback = await shopifyGraphql<{
+      productSet?: {
+        product?: { category?: { id?: string | null } | null };
+        userErrors?: Array<{ message: string }>;
+      };
+    }>(`mutation SetCategorySet($identifier: ProductSetIdentifiers, $input: ProductSetInput!, $synchronous: Boolean) {
+      productSet(identifier: $identifier, input: $input, synchronous: $synchronous) {
+        product { id category { id name } }
+        userErrors { field message }
+      }
+    }`, {
+      identifier: { id: productId },
+      synchronous: true,
+      input: buildCategorySetPayload(categoryId),
+    });
+    const fallbackErr = userErrorsMessage(fallback.data?.productSet?.userErrors);
+    if (fallbackErr) throw new Error(publishStepError('CATEGORY_UPDATE', fallbackErr));
+    if (!categoryIdsMatch(categoryId, fallback.data?.productSet?.product?.category?.id)) {
+      throwStep('CATEGORY_UPDATE', `Shopify category ${fallback.data?.productSet?.product?.category?.id || '(blank)'} does not match ${categoryId}.`);
+    }
+    return;
+  }
+  if (!categoryIdsMatch(categoryId, updated.data?.productUpdate?.product?.category?.id)) {
+    throwStep('CATEGORY_UPDATE', `Shopify category ${updated.data?.productUpdate?.product?.category?.id || '(blank)'} does not match ${categoryId}.`);
+  }
 }
 
 async function activateInventory(inventoryItemId: string, locationId: string, listingId: string) {
@@ -465,7 +908,7 @@ async function activateInventory(inventoryItemId: string, locationId: string, li
     });
     const err = userErrorsMessage(result.data?.inventoryActivate?.userErrors);
     if (err && !/already.+activ/i.test(err)) {
-      throw new Error(`Inventory update failed: ${err}`);
+      throw new Error(publishStepError('SET_INVENTORY', err));
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : '';
@@ -496,7 +939,7 @@ async function setInventory(inventoryItemId: string, locationId: string, quantit
     },
   });
   const err = userErrorsMessage(result.data?.inventorySetQuantities?.userErrors);
-  if (err) throw new Error(`Inventory update failed: ${err}`);
+  if (err) throw new Error(publishStepError('SET_INVENTORY', err));
 }
 
 async function verifyInventory(inventoryItemId: string, locationId: string, expected: number): Promise<boolean> {
@@ -525,21 +968,29 @@ async function verifyInventory(inventoryItemId: string, locationId: string, expe
   }
 }
 
-async function attachPhotos(productId: string, photos: string[], alt: string): Promise<string | null> {
-  const expected = photos.filter((p) => typeof p === 'string' && p.trim());
-  if (expected.length === 0) return null;
+async function attachListingPhotos(
+  client: SupabaseClient,
+  productId: string,
+  photos: unknown,
+  alt: string,
+): Promise<{ expected: number; uploaded: number; warnings: string[] }> {
+  const assets = listingPhotoAssets(photos);
+  const expected = assets.length;
+  if (!expected) return { expected: 0, uploaded: 0, warnings: [] };
 
   const existing = await shopifyGraphql<{ product: { media?: { nodes: Array<{ id: string }> } } }>(
     `query Media($id: ID!) { product(id: $id) { media(first: 30) { nodes { id } } } }`,
     { id: productId },
   );
-  if ((existing.data?.product?.media?.nodes.length || 0) >= expected.length) return null;
+  const existingCount = existing.data?.product?.media?.nodes.length || 0;
+  if (existingCount >= expected) return { expected, uploaded: existingCount, warnings: [] };
 
-  let succeeded = 0;
-  const failures: string[] = [];
-  for (let i = 0; i < expected.length; i++) {
+  let succeeded = existingCount;
+  const warnings: string[] = [];
+  for (const asset of assets) {
+    const kind = asset.kind || photoSourceKind(asset.url, asset.path);
     try {
-      const source = await resolveMediaSource(expected[i], i);
+      const source = await resolveListingMediaSource(client, asset, asset.index);
       const result = await shopifyGraphql<{
         productCreateMedia: { mediaUserErrors?: Array<{ message: string }>; media?: Array<{ id?: string }> };
       }>(`mutation AddMedia($productId: ID!, $media: [CreateMediaInput!]!) {
@@ -549,22 +1000,43 @@ async function attachPhotos(productId: string, photos: string[], alt: string): P
         }
       }`, {
         productId,
-        media: [{ originalSource: source, mediaContentType: 'IMAGE', alt: `${alt} ${i + 1}` }],
+        media: [{ originalSource: source, mediaContentType: 'IMAGE', alt: `${alt} ${asset.index + 1}` }],
       });
       const err = userErrorsMessage(result.data?.productCreateMedia?.mediaUserErrors);
       if (err) throw new Error(err);
+      if (!result.data?.productCreateMedia?.media?.some((row) => row.id)) {
+        throw new Error('Shopify did not return media IDs.');
+      }
       succeeded += 1;
     } catch (err) {
-      failures.push(`Image ${i + 1}: ${sanitizeShopifyError(err instanceof Error ? err.message : 'failed')}`);
+      const message = sanitizeShopifyError(err instanceof Error ? err.message : 'failed');
+      const labeled = publishStepError(`PHOTO_UPLOAD[${asset.index}]`, `${kind}: ${message}`);
+      warnings.push(labeled);
+      console.error('[shopify-publish]', labeled);
     }
   }
 
-  if (succeeded === 0) throw new Error(`Image could not be downloaded. ${failures.join('; ')}`);
-  if (failures.length) return `Some images failed: ${failures.join('; ')}`;
-  return null;
+  if (expected > 0 && succeeded === 0) {
+    throw new Error(publishStepError('PHOTO_UPLOAD', warnings.join('; ') || '0 successful photos.'));
+  }
+  return { expected, uploaded: succeeded, warnings };
 }
 
-async function resolveMediaSource(photo: string, index: number): Promise<string> {
+async function resolveListingMediaSource(
+  client: SupabaseClient,
+  asset: { url: string; path?: string; index: number },
+  index: number,
+): Promise<string> {
+  if (asset.path) {
+    const signed = await client.storage.from('shopify-listing-photos').createSignedUrl(asset.path, 60 * 60);
+    if (signed.data?.signedUrl) return signed.data.signedUrl;
+  }
+  if (asset.url.startsWith('data:')) return stagedUploadDataUrl(asset.url, index);
+  if (isHttpUrl(asset.url)) return asset.url;
+  throw new Error('Unsupported image source.');
+}
+
+async function stagedUploadDataUrl(photo: string, index: number): Promise<string> {
   if (isHttpUrl(photo)) return photo;
   const parsed = parseDataUrl(photo);
   if (!parsed) throw new Error('Unsupported image format.');
@@ -605,23 +1077,41 @@ async function setMetafields(productId: string, listing: Record<string, unknown>
     (listing.attributes && typeof listing.attributes === 'object') ? listing.attributes as Record<string, unknown> : {},
     String(listing.condition || ''),
   );
-  if (!fields.length) return;
-  const result = await shopifyGraphql<{ metafieldsSet: { userErrors?: Array<{ message: string }> } }>(
-    `mutation Meta($metafields: [MetafieldsSetInput!]!) {
+  if (fields.length) {
+    const result = await shopifyGraphql<{ metafieldsSet: { userErrors?: Array<{ message: string }> } }>(
+      `mutation Meta($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) { userErrors { field message } }
+      }`,
+      {
+        metafields: fields.map((field) => ({
+          ownerId: productId,
+          namespace: field.namespace,
+          key: field.key,
+          type: field.type,
+          value: field.value,
+        })),
+      },
+    );
+    const err = userErrorsMessage(result.data?.metafieldsSet?.userErrors);
+    if (err) throw new Error(publishStepError('SET_METAFIELDS', err));
+  }
+  const categoryFields = categoryMetafields(listing);
+  if (!categoryFields.length) return;
+  try {
+    await shopifyGraphql(`mutation Meta($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) { userErrors { field message } }
-    }`,
-    {
-      metafields: fields.map((field) => ({
+    }`, {
+      metafields: categoryFields.map((field) => ({
         ownerId: productId,
         namespace: field.namespace,
         key: field.key,
         type: field.type,
         value: field.value,
       })),
-    },
-  );
-  const err = userErrorsMessage(result.data?.metafieldsSet?.userErrors);
-  if (err) throw new Error(`Invalid product data: ${err}`);
+    });
+  } catch {
+    // Shopify category metafields are best-effort and must not block publishing.
+  }
 }
 
 async function activateProduct(productId: string) {
@@ -633,13 +1123,13 @@ async function activateProduct(productId: string) {
   const err = userErrorsMessage(result.data?.productUpdate?.userErrors);
   if (err) {
     const fallback = await shopifyGraphql<{ productSet: { userErrors?: Array<{ message: string }> } }>(
-      `mutation ActivateSet($input: ProductSetInput!) {
-        productSet(input: $input) { userErrors { field message } }
+      `mutation ActivateSet($identifier: ProductSetIdentifiers, $input: ProductSetInput!, $synchronous: Boolean) {
+        productSet(identifier: $identifier, input: $input, synchronous: $synchronous) { userErrors { field message } }
       }`,
-      { input: { id: productId, status: 'ACTIVE' } },
+      { identifier: { id: productId }, input: { status: 'ACTIVE' }, synchronous: true },
     );
     const fallbackErr = userErrorsMessage(fallback.data?.productSet?.userErrors);
-    if (fallbackErr) throw new Error(fallbackErr);
+    if (fallbackErr) throw new Error(publishStepError('ACTIVATE', fallbackErr));
   }
 }
 
@@ -676,12 +1166,22 @@ async function publishToOnlineStore(productId: string, warnings: string[]): Prom
   }
 }
 
+async function markInventoryShopifyListed(client: SupabaseClient, inventoryId: string) {
+  const now = new Date().toISOString();
+  const full = await client.from('pos_inventory').update({
+    status: 'listed',
+    listing_method: 'shopify',
+  }).eq('id', inventoryId);
+  if (!full.error) return;
+  await client.from('pos_inventory').update({ status: 'listed' }).eq('id', inventoryId);
+}
+
 async function persistIds(
   client: SupabaseClient,
   listing: Record<string, unknown>,
-  ids: { productId: string; variantId: string; inventoryItemId: string; handle: string; locationId: string },
+  ids: { productId: string; variantId: string; inventoryItemId: string; handle: string; locationId: string; barcode?: string },
 ) {
-  await updateListingSafe(client, String(listing.id), {
+  const result = await updateListingSafe(client, String(listing.id), {
     shopify_product_id: ids.productId,
     shopify_variant_id: ids.variantId || null,
     shopify_inventory_item_id: ids.inventoryItemId || null,
@@ -689,13 +1189,32 @@ async function persistIds(
     shopify_location_id: ids.locationId,
     shopify_url: adminProductUrl(shopifyStoreDomain(), ids.productId),
     shopify_admin_url: adminProductUrl(shopifyStoreDomain(), ids.productId),
+    ...(ids.barcode ? { barcode: ids.barcode } : {}),
+    updated_at: new Date().toISOString(),
+  });
+  if (result.error) throw new Error(publishStepError('SAVE_SHOPIFY_IDS', result.error.message));
+  listing.shopify_product_id = ids.productId;
+  listing.shopify_variant_id = ids.variantId;
+  listing.shopify_inventory_item_id = ids.inventoryItemId;
+  listing.shopify_handle = ids.handle;
+}
+
+async function failListing(client: SupabaseClient, listing: Record<string, unknown>, message: string) {
+  await updateListingSafe(client, String(listing.id), {
+    status: 'error',
+    last_error: message,
     updated_at: new Date().toISOString(),
   });
 }
 
-async function updateListingSafe(client: SupabaseClient, id: string, patch: Record<string, unknown>) {
+async function persistIdsOrThrow(client: SupabaseClient, listing: Record<string, unknown>, patch: Record<string, unknown>) {
+  const result = await updateListingSafe(client, String(listing.id), patch);
+  if (result.error) throw new Error(publishStepError('SAVE_SHOPIFY_IDS', result.error.message));
+}
+
+async function updateListingSafe(client: SupabaseClient, id: string, patch: Record<string, unknown>): Promise<{ error?: { message: string } | null }> {
   const first = await client.from('pos_shopify_listings').update(patch).eq('id', id);
-  if (!first.error) return;
+  if (!first.error) return { error: null };
   const fallback = { ...patch };
   delete fallback.shopify_admin_url;
   delete fallback.shopify_storefront_url;
@@ -704,7 +1223,11 @@ async function updateListingSafe(client: SupabaseClient, id: string, patch: Reco
   delete fallback.publish_warning;
   delete fallback.shopify_location_id;
   const second = await client.from('pos_shopify_listings').update(fallback).eq('id', id);
-  if (second.error) console.error('[shopify-publish] update failed', second.error.message);
+  if (second.error) {
+    console.error('[shopify-publish] update failed', second.error.message);
+    return { error: { message: second.error.message } };
+  }
+  return { error: null };
 }
 
 async function writeAudit(
@@ -726,7 +1249,7 @@ async function writeAudit(
     action,
     record_type: 'shopify_listing',
     record_id: String(listing.id),
-    details: `${details} | listing=${listing.id} inventory=${listing.inventory_item_id} device=${inventory?.device_code || listing.sku || ''}`.slice(0, 500),
+    details: `${details} | listing=${listing.id} inventory=${listing.inventory_item_id} device=${inventory?.device_code || listing.sku || ''} barcode=${listing.barcode || inventory?.barcode || ''}`.slice(0, 500),
     created_at: new Date().toISOString(),
   });
 }

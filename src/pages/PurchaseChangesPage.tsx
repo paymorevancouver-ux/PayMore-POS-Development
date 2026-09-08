@@ -646,7 +646,7 @@ export default function PurchaseChangesPage() {
                           variant="outline"
                           className={`text-[8px] ${status === 'sold' ? 'border-red-300 text-red-700' : status === 'listed' ? 'border-emerald-300 text-emerald-700' : 'border-amber-300 text-amber-700'}`}
                         >
-                          {invItem ? (status === 'available' ? 'Non-Listed' : status === 'listed' ? 'Available' : status) : 'Not in inventory'}
+                          {invItem ? (status === 'available' ? 'Non-Listed' : status === 'listed' ? 'Listed' : status) : 'Not in inventory'}
                         </Badge>
                       </div>
                     ))}

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Camera, X, Plus, ImageIcon } from 'lucide-react';
 
@@ -6,6 +6,7 @@ interface DevicePhotoCaptureProps {
   photos: string[];
   onChange: (photos: string[]) => void;
   maxPhotos?: number;
+  extraActions?: ReactNode;
 }
 
 function compressImage(file: File, maxWidth = 800, quality = 0.7): Promise<string> {
@@ -39,7 +40,7 @@ function compressImage(file: File, maxWidth = 800, quality = 0.7): Promise<strin
   });
 }
 
-export default function DevicePhotoCapture({ photos, onChange, maxPhotos = 5 }: DevicePhotoCaptureProps) {
+export default function DevicePhotoCapture({ photos, onChange, maxPhotos = 5, extraActions }: DevicePhotoCaptureProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
@@ -78,18 +79,21 @@ export default function DevicePhotoCapture({ photos, onChange, maxPhotos = 5 }: 
           <span className="text-[11px] font-medium">Device Photos</span>
           <span className="text-[9px] text-muted-foreground">({photos.length}/{maxPhotos})</span>
         </div>
-        {canAdd && (
-          <div className="flex gap-1">
-            <Button type="button" size="sm" variant="outline" className="h-6 text-[9px] px-2"
-              onClick={() => fileRef.current?.click()}>
-              <Plus className="size-2.5 mr-0.5" />Browse
-            </Button>
-            <Button type="button" size="sm" variant="outline" className="h-6 text-[9px] px-2"
-              onClick={() => cameraRef.current?.click()}>
-              <Camera className="size-2.5 mr-0.5" />Camera
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-1 justify-end">
+          {canAdd && (
+            <>
+              <Button type="button" size="sm" variant="outline" className="h-6 text-[9px] px-2"
+                onClick={() => fileRef.current?.click()}>
+                <Plus className="size-2.5 mr-0.5" />Browse
+              </Button>
+              <Button type="button" size="sm" variant="outline" className="h-6 text-[9px] px-2"
+                onClick={() => cameraRef.current?.click()}>
+                <Camera className="size-2.5 mr-0.5" />Camera
+              </Button>
+            </>
+          )}
+          {extraActions}
+        </div>
       </div>
 
       {/* Hidden file inputs */}

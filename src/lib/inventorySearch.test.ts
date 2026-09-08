@@ -38,18 +38,21 @@ describe('inventorySearch', () => {
     expect(matchesInventorySearch(sample, 'iphone')).toBe(true);
   });
 
-  it('matches device code', () => {
-    expect(matchesInventorySearch(sample, 'BC05-000846')).toBe(true);
+  it('matches retail barcode', () => {
+    expect(matchesInventorySearch({ ...sample, barcode: '405000006234' }, '405000006234')).toBe(true);
   });
 
   it('matches lifecycle status keyword', () => {
     expect(matchesInventorySearch({ ...sample, status: 'sold' }, 'sold')).toBe(true);
-    expect(getInventoryLifecycleLabel('listed')).toBe('Live');
+    expect(getInventoryLifecycleLabel('listed')).toBe('Listed');
   });
 
   it('filters by internal status value', () => {
     expect(filterInventoryByStatus(sample, 'listed')).toBe(true);
     expect(filterInventoryByStatus(sample, 'sold')).toBe(false);
+    expect(filterInventoryByStatus({ ...sample, listingMethod: 'shopify' }, 'shopify_listed')).toBe(true);
+    expect(filterInventoryByStatus({ ...sample, listingMethod: 'processed_manual' }, 'processed_manual')).toBe(true);
+    expect(filterInventoryByStatus({ ...sample, quantityOnHand: 0 }, 'sold_out')).toBe(true);
   });
 
   it('includes sale code in search blob', () => {

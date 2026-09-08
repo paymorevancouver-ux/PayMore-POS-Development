@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, ContactRound, Landmark, Package, ShoppingCart, RotateCcw,
   ArrowRightLeft, FileEdit, BarChart3, Settings, ScrollText, LogOut,
-  UserCog, Tag, Store,
+  UserCog, Tag, Store, RefreshCw,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/taxCalc';
 import type { LucideIcon } from 'lucide-react';
@@ -42,6 +42,7 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     items: [
       { path: '/pos/inventory', label: 'Inventory', icon: Package, module: 'inventory' },
       { path: '/pos/shopify-lister', label: 'Shopify Auto Lister', icon: Store, module: 'shopify-lister' },
+      { path: '/pos/shopify-sync', label: 'Shopify Sync', icon: RefreshCw, module: 'shopify-lister' },
       {
         path: '/pos/sales',
         label: 'Sales',

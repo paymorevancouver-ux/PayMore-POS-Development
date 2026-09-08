@@ -1,7 +1,10 @@
 import { getSpecCategory } from '@/config/productSpecifications';
-import { COMMON_ACCESSORIES } from '@/lib/shopify/constants';
+import { buildIncludedItems } from '@/config/shopifyIncludedItems';
 import { getAttributeValue, setAttributeValue } from '@/lib/shopify/attributes';
-import { generateShopifyDescription } from '@/lib/shopify/descriptionGenerator';
+import { mapPosConditionToCosmetic } from '@/lib/shopify/conditionPhrases';
+import { syncGeneratedDescription } from '@/lib/shopify/descriptionSync';
+import { getListerMeta, withListerMeta } from '@/lib/shopify/listerMeta';
+import { resolveExistingBarcode } from '@/lib/shopify/retailBarcode';
 import { generateShopifyTags } from '@/lib/shopify/tagGenerator';
 import { generateShopifyTitle } from '@/lib/shopify/titleGenerator';
 import type { DeviceSpecifications, InventoryItem, PurchaseItem } from '@/types';
@@ -64,34 +67,31 @@ export function prefillAccessories(
   categoryKey: string,
   brand: string,
   specs?: DeviceSpecifications,
+  model = '',
 ): ShopifyAccessory[] {
   const category = getSpecCategory(categoryKey, brand);
-  const existing = Array.isArray(specs?.accessories) ? specs!.accessories! : [];
-  const byId = new Map(existing.map((a) => [a.id, a]));
-  const fromCategory = category.accessories.map((def) => {
-    const prev = byId.get(def.id);
-    return {
-      id: def.id,
-      label: def.label,
-      included: Boolean(prev?.included),
-      quantity: def.quantity ? (prev?.quantity || 1) : undefined,
-    };
-  });
-  const extras = COMMON_ACCESSORIES
-    .filter((acc) => !fromCategory.some((row) => row.id === acc.id))
-    .map((acc) => ({ id: acc.id, label: acc.label, included: false }));
-  const custom = existing
-    .filter((a) => !fromCategory.some((row) => row.id === a.id) && a.included)
-    .map((a) => ({ id: a.id, label: a.note || a.id, included: true, quantity: a.quantity, custom: true }));
+  const existing = Array.isArray(specs?.accessories) ? specs!.accessories!.map((item) => ({
+    id: item.id,
+    label: item.note || item.id,
+    included: Boolean(item.included),
+    quantity: item.quantity,
+    custom: !['device', 'original-charger', 'original-box'].includes(item.id),
+  })) : [];
   if (specs?.otherAccessories?.trim()) {
-    custom.push({
+    existing.push({
       id: `custom-${specs.otherAccessories.trim().toLowerCase().replace(/\s+/g, '-')}`,
       label: specs.otherAccessories.trim(),
       included: true,
       custom: true,
     });
   }
-  return [...fromCategory, ...extras, ...custom];
+  return buildIncludedItems({
+    categoryKey: category.key,
+    brand,
+    model,
+    specs: specs as Record<string, unknown>,
+    previous: existing,
+  });
 }
 
 export function prefillTesting(
@@ -114,8 +114,13 @@ export function prefillTesting(
 }
 
 export function resolveBarcode(item: InventoryItem, specs?: DeviceSpecifications): string {
-  const fromSpecs = String(specs?.upcSku || getAttributeValue((specs || {}) as Record<string, unknown>, 'upcSku') || '').trim();
-  return fromSpecs;
+  return resolveExistingBarcode({
+    inventoryBarcode: item.barcode,
+    upcSku: String(specs?.upcSku || getAttributeValue((specs || {}) as Record<string, unknown>, 'upcSku') || ''),
+    deviceCode: item.deviceCode,
+    sku: item.deviceCode,
+    serialImei: item.serialImei,
+  });
 }
 
 export function buildDraftListing(input: {
@@ -136,7 +141,7 @@ export function buildDraftListing(input: {
     serialNumber: getAttributeValue((specs || {}) as Record<string, unknown>, 'serialNumber') || input.inventory.serialImei,
     imei1: getAttributeValue((specs || {}) as Record<string, unknown>, 'imei1') || input.inventory.serialImei,
   };
-  const accessories = prefillAccessories(category.key, input.inventory.brand, specs);
+  const accessories = prefillAccessories(category.key, input.inventory.brand, specs, input.inventory.model);
   const testingResults = prefillTesting(category.key, input.inventory.brand, specs);
   const title = input.inventory.listingTitle
     || input.purchaseItem?.listingTitle
@@ -146,29 +151,24 @@ export function buildDraftListing(input: {
       model: input.inventory.model,
       attributes,
     });
-  const description = generateShopifyDescription({
-    categoryKey: category.key,
-    brand: input.inventory.brand,
-    model: input.inventory.model,
-    condition: input.purchaseItem?.condition || '',
-    attributes,
-    accessories,
-    testingResults,
-  });
-
-  return {
+  const cosmeticConditionKey = mapPosConditionToCosmetic(input.purchaseItem?.condition || String(attributes.cosmeticCondition || ''));
+  const listing: ShopifyListing = {
     id: input.id,
     storeId: input.storeId,
     inventoryItemId: input.inventory.id,
     status: 'draft',
     title,
-    description,
+    description: '',
     price: input.inventory.expectedSalePrice || 0,
     compareAtPrice: null,
     quantity: Math.max(1, input.inventory.quantityOnHand || 1),
-    condition: input.purchaseItem?.condition || String(attributes.cosmeticCondition || ''),
+    condition: input.purchaseItem?.condition || String(attributes.cosmeticCondition || cosmeticConditionKey || ''),
     shopifyVendor: input.inventory.brand || category.defaultBrand || '',
     shopifyProductType: category.productType,
+    shopifyCategoryId: null,
+    shopifyCategoryName: null,
+    shopifyCategoryFullName: null,
+    shopifyCategoryConfirmed: false,
     sku: input.inventory.deviceCode,
     barcode: resolveBarcode(input.inventory, specs),
     tags: generateShopifyTags({
@@ -179,10 +179,20 @@ export function buildDraftListing(input: {
       attributes,
     }),
     photos: [...(input.purchaseItem?.photos || [])],
-    attributes,
+    attributes: { ...attributes, categoryId: category.key },
     accessories,
     testingResults,
     staffNotes: '',
+    extraTitleText: '',
+    cosmeticConditionKey,
+    cosmeticConditionNotes: '',
+    functionalityConditionKey: '',
+    functionalityNotes: '',
+    descriptionMode: 'generated',
+    includeNotListedWarning: true,
+    originCountry: '',
+    publicNotes: '',
+    titleMode: input.inventory.listingTitle ? 'manual' : 'generated',
     shopifyProductId: null,
     shopifyVariantId: null,
     shopifyInventoryItemId: null,
@@ -196,6 +206,12 @@ export function buildDraftListing(input: {
     lastSyncedAt: null,
     endedAt: null,
   };
+  return syncGeneratedDescription(withListerMeta(listing, {
+    cosmeticConditionKey,
+    descriptionMode: 'generated',
+    includeNotListedWarning: true,
+    titleMode: listing.titleMode || 'generated',
+  }));
 }
 
 export function applyDraftUpdates(
@@ -203,7 +219,7 @@ export function applyDraftUpdates(
   updates: Partial<ShopifyListing>,
   now = new Date().toISOString(),
 ): ShopifyListing {
-  return {
+  const next: ShopifyListing = {
     ...listing,
     ...updates,
     id: listing.id,
@@ -211,4 +227,26 @@ export function applyDraftUpdates(
     inventoryItemId: listing.inventoryItemId,
     updatedAt: now,
   };
+  const metaKeys = [
+    'extraTitleText',
+    'cosmeticConditionKey',
+    'cosmeticConditionNotes',
+    'functionalityConditionKey',
+    'functionalityNotes',
+    'descriptionMode',
+    'includeNotListedWarning',
+    'originCountry',
+    'publicNotes',
+    'titleMode',
+  ] as const;
+  const metaPatch: Record<string, unknown> = {};
+  for (const key of metaKeys) {
+    if (updates[key] !== undefined) metaPatch[key] = updates[key];
+  }
+  const withMeta = Object.keys(metaPatch).length
+    ? withListerMeta(next, metaPatch as Partial<import('./listerMeta').ShopifyListerMeta>)
+    : next;
+  const mode = withMeta.descriptionMode || getListerMeta(withMeta).descriptionMode;
+  if (mode === 'manual') return withMeta;
+  return syncGeneratedDescription(withMeta);
 }

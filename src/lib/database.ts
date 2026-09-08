@@ -11,7 +11,9 @@ import type {
   Return, PaymentChange, PurchaseChange, CashDrawerEntry,
   AuditLogEntry, LabelPrintLog, Employee, LocationHistoryEntry,
 } from '@/types';
-import type { ShopifyAccessory, ShopifyListing, ShopifyListingStatus, ShopifyTestResult } from '@/types/shopify';
+import type { ShopifyAccessory, ShopifyListing, ShopifyListingPhoto, ShopifyListingStatus, ShopifyTestResult } from '@/types/shopify';
+import { getListerMeta } from '@/lib/shopify/listerMeta';
+import { fromShopifyCategoryColumns, toShopifyCategoryColumns } from '@/lib/shopify/categoryPersistence';
 
 // ── Generic helpers ──
 
@@ -127,6 +129,7 @@ function mapInventory(r: Record<string, unknown>): InventoryItem {
     visitId: r.visit_id as string || undefined,
     category: r.category as string, brand: r.brand as string,
     model: r.model as string, serialImei: r.serial_imei as string || '',
+    barcode: (r.barcode as string) || '',
     quantityOnHand: Number(r.quantity_on_hand), costPerUnit: Number(r.cost_per_unit),
     expectedSalePrice: Number(r.expected_sale_price),
     status: r.status as InventoryItem['status'], storeId: r.store_id as string,
@@ -143,6 +146,9 @@ function mapInventory(r: Record<string, unknown>): InventoryItem {
     labelPrintCount: Number(r.label_print_count) || 0,
     lastLabelPrintAt: (r.last_label_print_at as string) || null,
     lastLabelPrintBy: (r.last_label_print_by as string) || null,
+    listingMethod: (r.listing_method as InventoryItem['listingMethod']) || null,
+    processedAt: (r.processed_at as string) || null,
+    processedByEmployeeId: (r.processed_by_employee_id as string) || null,
     specifications: (r.specifications as InventoryItem['specifications']) || {},
     listingTitle: (r.listing_title as string) || '',
   };
@@ -173,6 +179,11 @@ function mapSale(r: Record<string, unknown>): SaleTransaction {
     salesChannel: r.sales_channel as SaleTransaction['salesChannel'],
     notes: r.notes as string || '', status: r.status as SaleTransaction['status'],
     createdAt: r.created_at as string, completedAt: r.completed_at as string | null,
+    shopifyOrderId: (r.shopify_order_id as string) || null,
+    shopifyOrderName: (r.shopify_order_name as string) || null,
+    shopifyCustomerName: (r.shopify_customer_name as string) || null,
+    shopifyCustomerEmail: (r.shopify_customer_email as string) || null,
+    shopifyOrderUrl: (r.shopify_order_url as string) || null,
   };
 }
 
@@ -201,6 +212,7 @@ function mapReturn(r: Record<string, unknown>): Return {
     reason: r.reason as string, returnAmount: Number(r.return_amount),
     refundMethod: r.refund_method as Return['refundMethod'],
     status: r.status as Return['status'],
+    restockSellable: r.restock_sellable == null ? true : Boolean(r.restock_sellable),
     createdAt: r.created_at as string, completedAt: r.completed_at as string | null,
   };
 }
@@ -263,7 +275,7 @@ function mapLabel(r: Record<string, unknown>): LabelPrintLog {
 }
 
 function mapShopifyListing(r: Record<string, unknown>): ShopifyListing {
-  return {
+  const base: ShopifyListing = {
     id: r.id as string,
     storeId: r.store_id as string,
     inventoryItemId: r.inventory_item_id as string,
@@ -279,11 +291,25 @@ function mapShopifyListing(r: Record<string, unknown>): ShopifyListing {
     sku: (r.sku as string) || '',
     barcode: (r.barcode as string) || '',
     tags: Array.isArray(r.tags) ? r.tags as string[] : [],
-    photos: Array.isArray(r.photos) ? r.photos as string[] : [],
+    photos: Array.isArray(r.photos) ? r.photos as ShopifyListingPhoto[] : [],
     attributes: (r.attributes as Record<string, unknown>) || {},
     accessories: Array.isArray(r.accessories) ? r.accessories as ShopifyAccessory[] : [],
     testingResults: (r.testing_results as Record<string, ShopifyTestResult>) || {},
     staffNotes: (r.staff_notes as string) || '',
+    extraTitleText: (r.extra_title_text as string) || undefined,
+    cosmeticConditionKey: (r.cosmetic_condition as string) || undefined,
+    cosmeticConditionNotes: (r.cosmetic_condition_notes as string) || undefined,
+    functionalityConditionKey: (r.functionality_condition as string) || undefined,
+    functionalityNotes: (r.functionality_notes as string) || undefined,
+    descriptionMode: (r.description_mode as 'generated' | 'manual') || undefined,
+    includeNotListedWarning: r.include_not_listed_warning == null ? undefined : Boolean(r.include_not_listed_warning),
+    originCountry: (r.origin_country as string) || undefined,
+    publicNotes: (r.public_notes as string) || undefined,
+    titleMode: (r.title_mode as 'generated' | 'manual') || undefined,
+    ...fromShopifyCategoryColumns(r),
+    shopifyTaxonomyAttributes: Array.isArray((r.attributes as { __taxonomyAttributes?: unknown })?.__taxonomyAttributes)
+      ? (r.attributes as { __taxonomyAttributes: ShopifyListing['shopifyTaxonomyAttributes'] }).__taxonomyAttributes
+      : undefined,
     shopifyProductId: (r.shopify_product_id as string) || null,
     shopifyVariantId: (r.shopify_variant_id as string) || null,
     shopifyInventoryItemId: (r.shopify_inventory_item_id as string) || null,
@@ -302,7 +328,11 @@ function mapShopifyListing(r: Record<string, unknown>): ShopifyListing {
     publishedAt: (r.published_at as string) || null,
     lastSyncedAt: (r.last_synced_at as string) || null,
     endedAt: (r.ended_at as string) || null,
+    syncStatus: (r.sync_status as ShopifyListing['syncStatus']) || 'idle',
+    lastSyncError: (r.last_sync_error as string) || null,
+    lastSyncEventType: (r.last_sync_event_type as string) || null,
   };
+  return { ...base, ...getListerMeta(base) };
 }
 
 function shopifyListingRow(listing: ShopifyListing): Record<string, unknown> {
@@ -323,10 +353,23 @@ function shopifyListingRow(listing: ShopifyListing): Record<string, unknown> {
     barcode: listing.barcode,
     tags: listing.tags,
     photos: listing.photos,
-    attributes: listing.attributes,
+    attributes: listing.shopifyTaxonomyAttributes
+      ? { ...listing.attributes, __taxonomyAttributes: listing.shopifyTaxonomyAttributes }
+      : listing.attributes,
     accessories: listing.accessories,
     testing_results: listing.testingResults,
     staff_notes: listing.staffNotes,
+    extra_title_text: listing.extraTitleText || '',
+    cosmetic_condition: listing.cosmeticConditionKey || '',
+    cosmetic_condition_notes: listing.cosmeticConditionNotes || '',
+    functionality_condition: listing.functionalityConditionKey || '',
+    functionality_notes: listing.functionalityNotes || '',
+    description_mode: listing.descriptionMode || 'generated',
+    include_not_listed_warning: listing.includeNotListedWarning !== false,
+    origin_country: listing.originCountry || '',
+    public_notes: listing.publicNotes || '',
+    title_mode: listing.titleMode || 'generated',
+    ...toShopifyCategoryColumns(listing),
     shopify_product_id: listing.shopifyProductId,
     shopify_variant_id: listing.shopifyVariantId,
     shopify_inventory_item_id: listing.shopifyInventoryItemId,
@@ -572,6 +615,9 @@ export const db = {
       specifications: item.specifications || {},
       listing_title: item.listingTitle || '',
     };
+    const withBarcode = { ...withSpecs, barcode: item.barcode || null };
+    const savedBarcode = await insert('pos_inventory', withBarcode);
+    if (savedBarcode) return true;
     const saved = await insert('pos_inventory', withSpecs);
     if (saved) return true;
     return !!await insert('pos_inventory', base);
@@ -602,7 +648,20 @@ export const db = {
     if (updates.brand !== undefined) mapped.brand = updates.brand;
     if (updates.model !== undefined) mapped.model = updates.model;
     if (updates.serialImei !== undefined) mapped.serial_imei = updates.serialImei;
-    return update('pos_inventory', id, mapped);
+    if (updates.barcode !== undefined) mapped.barcode = updates.barcode || null;
+    if (updates.listingMethod !== undefined) mapped.listing_method = updates.listingMethod || null;
+    if (updates.processedAt !== undefined) mapped.processed_at = updates.processedAt || null;
+    if (updates.processedByEmployeeId !== undefined) mapped.processed_by_employee_id = updates.processedByEmployeeId || null;
+    const ok = await update('pos_inventory', id, mapped);
+    if (ok) return true;
+    if (mapped.listing_method !== undefined || mapped.processed_at !== undefined || mapped.processed_by_employee_id !== undefined) {
+      const fallback = { ...mapped };
+      delete fallback.listing_method;
+      delete fallback.processed_at;
+      delete fallback.processed_by_employee_id;
+      return update('pos_inventory', id, fallback);
+    }
+    return false;
   },
 
   // ── Location History ──
@@ -638,14 +697,28 @@ export const db = {
     return rows.map(mapSale);
   },
   async insertSale(storeId: string, s: SaleTransaction): Promise<boolean> {
-    return !!await insert('pos_sales', {
+    const row = {
       id: s.id, store_id: storeId, sale_code: s.saleCode,
       customer_id: s.customerId || null, employee_id: s.employeeId,
       subtotal: s.subtotal, gst_total: s.gstTotal, pst_total: s.pstTotal,
       tax_total: s.taxTotal, total_amount: s.totalAmount,
       sales_channel: s.salesChannel, notes: s.notes, status: s.status,
       created_at: s.createdAt, completed_at: s.completedAt,
-    });
+      shopify_order_id: s.shopifyOrderId || null,
+      shopify_order_name: s.shopifyOrderName || null,
+      shopify_customer_name: s.shopifyCustomerName || null,
+      shopify_customer_email: s.shopifyCustomerEmail || null,
+      shopify_order_url: s.shopifyOrderUrl || null,
+    };
+    const saved = await insert('pos_sales', row);
+    if (saved) return true;
+    const fallback = { ...row } as Record<string, unknown>;
+    delete fallback.shopify_order_id;
+    delete fallback.shopify_order_name;
+    delete fallback.shopify_customer_name;
+    delete fallback.shopify_customer_email;
+    delete fallback.shopify_order_url;
+    return !!await insert('pos_sales', fallback);
   },
   async updateSale(id: string, updates: Partial<SaleTransaction>): Promise<boolean> {
     const mapped: Record<string, unknown> = {};
@@ -701,7 +774,7 @@ export const db = {
     return rows.map(mapReturn);
   },
   async insertReturn(storeId: string, r: Return): Promise<boolean> {
-    return !!await insert('pos_returns', {
+    const row = {
       id: r.id, store_id: storeId, return_code: r.returnCode,
       source_transaction_type: r.sourceTransactionType,
       source_transaction_id: r.sourceTransactionId,
@@ -709,8 +782,14 @@ export const db = {
       customer_id: r.customerId || null, employee_id: r.employeeId,
       reason: r.reason, return_amount: r.returnAmount,
       refund_method: r.refundMethod, status: r.status,
+      restock_sellable: r.restockSellable !== false,
       created_at: r.createdAt, completed_at: r.completedAt,
-    });
+    };
+    const saved = await insert('pos_returns', row);
+    if (saved) return true;
+    const fallback = { ...row } as Record<string, unknown>;
+    delete fallback.restock_sellable;
+    return !!await insert('pos_returns', fallback);
   },
   async updateReturn(id: string, updates: Partial<Return>): Promise<boolean> {
     const mapped: Record<string, unknown> = {};
@@ -874,6 +953,16 @@ export const db = {
     delete fallback.last_publish_attempt_at;
     delete fallback.publish_warning;
     delete fallback.shopify_location_id;
+    delete fallback.extra_title_text;
+    delete fallback.cosmetic_condition;
+    delete fallback.cosmetic_condition_notes;
+    delete fallback.functionality_condition;
+    delete fallback.functionality_notes;
+    delete fallback.description_mode;
+    delete fallback.include_not_listed_warning;
+    delete fallback.origin_country;
+    delete fallback.public_notes;
+    delete fallback.title_mode;
     return !!await insert('pos_shopify_listings', fallback);
   },
   async updateShopifyListing(id: string, updates: Partial<ShopifyListing>): Promise<boolean> {
@@ -891,10 +980,25 @@ export const db = {
     if (updates.barcode !== undefined) mapped.barcode = updates.barcode;
     if (updates.tags !== undefined) mapped.tags = updates.tags;
     if (updates.photos !== undefined) mapped.photos = updates.photos;
-    if (updates.attributes !== undefined) mapped.attributes = updates.attributes;
+    if (updates.attributes !== undefined || updates.shopifyTaxonomyAttributes !== undefined) {
+      mapped.attributes = {
+        ...(updates.attributes || {}),
+        ...(updates.shopifyTaxonomyAttributes ? { __taxonomyAttributes: updates.shopifyTaxonomyAttributes } : {}),
+      };
+    }
     if (updates.accessories !== undefined) mapped.accessories = updates.accessories;
     if (updates.testingResults !== undefined) mapped.testing_results = updates.testingResults;
     if (updates.staffNotes !== undefined) mapped.staff_notes = updates.staffNotes;
+    if (updates.extraTitleText !== undefined) mapped.extra_title_text = updates.extraTitleText;
+    if (updates.cosmeticConditionKey !== undefined) mapped.cosmetic_condition = updates.cosmeticConditionKey;
+    if (updates.cosmeticConditionNotes !== undefined) mapped.cosmetic_condition_notes = updates.cosmeticConditionNotes;
+    if (updates.functionalityConditionKey !== undefined) mapped.functionality_condition = updates.functionalityConditionKey;
+    if (updates.functionalityNotes !== undefined) mapped.functionality_notes = updates.functionalityNotes;
+    if (updates.descriptionMode !== undefined) mapped.description_mode = updates.descriptionMode;
+    if (updates.includeNotListedWarning !== undefined) mapped.include_not_listed_warning = updates.includeNotListedWarning;
+    if (updates.originCountry !== undefined) mapped.origin_country = updates.originCountry;
+    if (updates.publicNotes !== undefined) mapped.public_notes = updates.publicNotes;
+    if (updates.titleMode !== undefined) mapped.title_mode = updates.titleMode;
     if (updates.shopifyProductId !== undefined) mapped.shopify_product_id = updates.shopifyProductId;
     if (updates.shopifyVariantId !== undefined) mapped.shopify_variant_id = updates.shopifyVariantId;
     if (updates.shopifyInventoryItemId !== undefined) mapped.shopify_inventory_item_id = updates.shopifyInventoryItemId;
@@ -910,7 +1014,74 @@ export const db = {
     if (updates.publishedAt !== undefined) mapped.published_at = updates.publishedAt;
     if (updates.lastSyncedAt !== undefined) mapped.last_synced_at = updates.lastSyncedAt;
     if (updates.endedAt !== undefined) mapped.ended_at = updates.endedAt;
-    return update('pos_shopify_listings', id, mapped);
+    if (updates.syncStatus !== undefined) mapped.sync_status = updates.syncStatus;
+    if (updates.lastSyncError !== undefined) mapped.last_sync_error = updates.lastSyncError;
+    if (updates.lastSyncEventType !== undefined) mapped.last_sync_event_type = updates.lastSyncEventType;
+    const saved = await update('pos_shopify_listings', id, mapped);
+    if (saved) return true;
+    const fallback = { ...mapped };
+    delete fallback.extra_title_text;
+    delete fallback.cosmetic_condition;
+    delete fallback.cosmetic_condition_notes;
+    delete fallback.functionality_condition;
+    delete fallback.functionality_notes;
+    delete fallback.description_mode;
+    delete fallback.include_not_listed_warning;
+    delete fallback.origin_country;
+    delete fallback.public_notes;
+    delete fallback.title_mode;
+    delete fallback.shopify_admin_url;
+    delete fallback.shopify_storefront_url;
+    delete fallback.publish_attempts;
+    delete fallback.last_publish_attempt_at;
+    delete fallback.publish_warning;
+    delete fallback.shopify_location_id;
+    delete fallback.sync_status;
+    delete fallback.last_sync_error;
+    delete fallback.last_sync_event_type;
+    return update('pos_shopify_listings', id, fallback);
+  },
+
+  async getShopifyListing(id: string): Promise<ShopifyListing | null> {
+    const { data, error } = await supabase.from('pos_shopify_listings').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      console.error('[DB] getShopifyListing:', error.message);
+      return null;
+    }
+    return data ? mapShopifyListing(data as Record<string, unknown>) : null;
+  },
+
+  async saveShopifyListingCategory(
+    id: string,
+    fields: {
+      shopifyCategoryId: string | null;
+      shopifyCategoryName: string | null;
+      shopifyCategoryFullName: string | null;
+      shopifyCategoryConfirmed: boolean;
+    },
+  ): Promise<{ listing: ShopifyListing | null; error?: string }> {
+    const mapped = {
+      ...toShopifyCategoryColumns(fields),
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase
+      .from('pos_shopify_listings')
+      .update(mapped)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+    if (error) {
+      console.error('[DB] saveShopifyListingCategory:', error.message);
+      return { listing: null, error: 'Could not save Shopify category.' };
+    }
+    const listing = data
+      ? mapShopifyListing(data as Record<string, unknown>)
+      : await db.getShopifyListing(id);
+    if (!listing) {
+      console.error('[DB] saveShopifyListingCategory: no row returned after update');
+      return { listing: null, error: 'Could not save Shopify category.' };
+    }
+    return { listing };
   },
 
   async seedInventory(storeId: string, items: InventoryItem[]): Promise<number> {
@@ -932,5 +1103,67 @@ export const db = {
       else count += batch.length;
     }
     return count;
+  },
+
+  async sellInventoryAtomic(inventoryId: string, quantity: number, soldAt: string): Promise<{
+    quantityOnHand: number;
+    status: InventoryItem['status'];
+    soldAt: string | null;
+    fullySold: boolean;
+  } | null> {
+    const { data, error } = await supabase.rpc('pos_sell_inventory_atomic', {
+      p_inventory_id: inventoryId,
+      p_quantity: quantity,
+      p_sold_at: soldAt,
+    });
+    if (error || !data) {
+      console.error('[DB] sellInventoryAtomic:', error?.message);
+      return null;
+    }
+    const row = data as { quantity_on_hand: number; status: string; sold_at: string | null; fully_sold: boolean };
+    return {
+      quantityOnHand: Number(row.quantity_on_hand),
+      status: row.status as InventoryItem['status'],
+      soldAt: row.sold_at,
+      fullySold: Boolean(row.fully_sold),
+    };
+  },
+
+  async restoreInventoryAtomic(
+    inventoryId: string,
+    quantity: number,
+    targetStatus: string,
+    sellable = true,
+  ): Promise<{ quantityOnHand: number; status: InventoryItem['status']; restocked: boolean } | null> {
+    const { data, error } = await supabase.rpc('pos_restore_inventory_atomic', {
+      p_inventory_id: inventoryId,
+      p_quantity: quantity,
+      p_target_status: targetStatus,
+      p_sellable: sellable,
+    });
+    if (error || !data) {
+      console.error('[DB] restoreInventoryAtomic:', error?.message);
+      return null;
+    }
+    const row = data as { quantity_on_hand: number; status: string; restocked: boolean };
+    return {
+      quantityOnHand: Number(row.quantity_on_hand),
+      status: row.status as InventoryItem['status'],
+      restocked: Boolean(row.restocked),
+    };
+  },
+
+  async getShopifySyncEvents(storeId: string) {
+    const { data, error } = await supabase
+      .from('pos_shopify_sync_events')
+      .select('*')
+      .eq('store_id', storeId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) {
+      console.error('[DB] getShopifySyncEvents:', error.message);
+      return [];
+    }
+    return data || [];
   },
 };
